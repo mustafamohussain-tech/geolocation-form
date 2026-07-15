@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>تسجيل زيارة نقطة بيع</title>
+<style>
+  :root {
+    --ink: #1c2b2d;
+    --paper: #f6f3ec;
+    --line: #d8d2c4;
+    --accent: #2f6f5e;
+    --accent-dark: #234f43;
+    --danger: #b3492f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Tahoma', 'Segoe UI', sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+  .card {
+    width: 100%;
+    max-width: 480px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 28px 24px 32px;
+  }
+  h1 {
+    font-size: 20px;
+    margin: 0 0 4px;
+    letter-spacing: 0.3px;
+  }
+  .sub {
+    font-size: 13px;
+    color: #6b6558;
+    margin: 0 0 24px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 16px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: bold;
+    margin: 16px 0 6px;
+  }
+  input[type="text"],
+  input[type="tel"],
+  select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    font-size: 15px;
+    font-family: inherit;
+    background: #fdfcf9;
+  }
+  input:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(47,111,94,0.15);
+  }
+  .geo-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 22px;
+    align-items: center;
+  }
+  .geo-btn {
+    flex: 1;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 12px;
+    border-radius: 3px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .geo-btn:hover { background: var(--accent-dark); }
+  .geo-status {
+    font-size: 12px;
+    color: #6b6558;
+    margin-top: 6px;
+    min-height: 16px;
+  }
+  .coords {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .coords input {
+    background: #f1efe7;
+    color: #6b6558;
+    font-size: 13px;
+  }
+  .submit-btn {
+    width: 100%;
+    margin-top: 26px;
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    padding: 13px;
+    border-radius: 3px;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  .submit-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .msg {
+    text-align: center;
+    font-size: 14px;
+    margin-top: 16px;
+    display: none;
+  }
+  .msg.success { color: var(--accent-dark); }
+  .msg.error { color: var(--danger); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>تسجيل زيارة نقطة بيع</h1>
+    <p class="sub">يرجى تعبئة البيانات ثم الضغط على "تحديد الموقع" قبل الإرسال</p>
+
+    <form id="geoForm">
+      <label for="store">اسم نقطة البيع</label>
+      <input type="text" id="store" name="اسم نقطة البيع" required>
+
+      <label for="phone">رقم الهاتف</label>
+      <input type="tel" id="phone" name="رقم الهاتف" required>
+
+      <label for="area">المنطقة</label>
+      <input type="text" id="area" name="المنطقة" required>
+
+      <label for="rep">المندوب</label>
+      <select id="rep" name="المندوب" required>
+        <option value="" disabled selected>اختر المندوب</option>
+        <option value="عبدالرحمن حقي إسماعيل">عبدالرحمن حقي إسماعيل</option>
+        <option value="فراس عبدالرضا عودة">فراس عبدالرضا عودة</option>
+        <option value="حسين حيدر صالح">حسين حيدر صالح</option>
+        <option value="كرار نارس جاسم">كرار نارس جاسم</option>
+        <option value="صالح قصي محمد">صالح قصي محمد</option>
+        <option value="حيدر محمد عبد">حيدر محمد عبد</option>
+      </select>
+
+      <div class="geo-row">
+        <button type="button" class="geo-btn" id="geoBtn" onclick="getLocation()">تحديد الموقع 📍</button>
+      </div>
+      <div class="geo-status" id="geoStatus"></div>
+
+      <div class="coords">
+        <input type="text" id="lat" placeholder="Latitude" readonly>
+        <input type="text" id="lng" placeholder="Longitude" readonly>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submitBtn" disabled>إرسال البيانات</button>
+      <div class="msg success" id="successMsg">تم إرسال البيانات بنجاح ✅</div>
+      <div class="msg error" id="errorMsg">حدث خطأ، حاول مرة أخرى ⚠️</div>
+    </form>
+  </div>
+
+<script>
+  // Paste your Web App URL from Apps Script "Deploy" step here:
+  const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwi1goiaj6e4SurnKURGlE-hq6O3EEWl9jgUioburtxUelGnKgacagHu-3NtSAmfXrW/exec";
+
+  function getLocation() {
+    const status = document.getElementById('geoStatus');
+    if (!navigator.geolocation) {
+      status.textContent = "المتصفح لا يدعم تحديد الموقع";
+      return;
+    }
+    status.textContent = "جارٍ تحديد الموقع...";
+    navigator.geolocation.getCurrentPosition(
+      function (position) {
+        document.getElementById('lat').value = position.coords.latitude;
+        document.getElementById('lng').value = position.coords.longitude;
+        status.textContent = "تم تحديد الموقع بنجاح";
+        document.getElementById('submitBtn').disabled = false;
+      },
+      function (err) {
+        status.textContent = "تعذر تحديد الموقع: يرجى تفعيل صلاحية الموقع";
+      }
+    );
+  }
+
+  document.getElementById('geoForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    const submitBtn = document.getElementById('submitBtn');
+    const successMsg = document.getElementById('successMsg');
+    const errorMsg = document.getElementById('errorMsg');
+    successMsg.style.display = 'none';
+    errorMsg.style.display = 'none';
+    submitBtn.disabled = true;
+    submitBtn.textContent = "جارٍ الإرسال...";
+
+    const formData = new FormData();
+    formData.append('اسم نقطة البيع', document.getElementById('store').value);
+    formData.append('رقم الهاتف', document.getElementById('phone').value);
+    formData.append('المنطقة', document.getElementById('area').value);
+    formData.append('المندوب', document.getElementById('rep').value);
+    formData.append('Latitude', document.getElementById('lat').value);
+    formData.append('Longitude', document.getElementById('lng').value);
+
+    fetch(WEB_APP_URL, { method: 'POST', body: formData, mode: 'no-cors' })
+      .then(function () {
+        successMsg.style.display = 'block';
+        document.getElementById('geoForm').reset();
+        document.getElementById('geoStatus').textContent = '';
+        submitBtn.textContent = "إرسال البيانات";
+      })
+      .catch(function () {
+        errorMsg.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = "إرسال البيانات";
+      });
+  });
+</script>
+</body>
+</html>
