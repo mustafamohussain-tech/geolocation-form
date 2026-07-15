@@ -91,6 +91,11 @@
     margin-top: 6px;
     min-height: 16px;
   }
+  .field-hint {
+    font-size: 11px;
+    color: #8a8370;
+    margin-top: 5px;
+  }
   .coords {
     display: flex;
     gap: 10px;
@@ -137,7 +142,13 @@
       <input type="text" id="store" name="اسم نقطة البيع" required>
 
       <label for="phone">رقم الهاتف</label>
-      <input type="tel" id="phone" name="رقم الهاتف" required>
+      <input type="tel" id="phone" name="رقم الهاتف" required
+        inputmode="numeric"
+        pattern="07[0-9]{9}"
+        maxlength="11"
+        placeholder="07715173456"
+        title="يجب أن يتكون الرقم من 11 رقمًا ويبدأ بـ 07">
+      <div class="field-hint">يجب إدخال 11 رقمًا يبدأ بـ 07 مثال: 07715173456</div>
 
       <label for="area">المنطقة</label>
       <input type="text" id="area" name="المنطقة" required>
@@ -173,6 +184,10 @@
   // Paste your Web App URL from Apps Script "Deploy" step here:
   const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwi1goiaj6e4SurnKURGlE-hq6O3EEWl9jgUioburtxUelGnKgacagHu-3NtSAmfXrW/exec";
 
+  document.getElementById('phone').addEventListener('input', function (e) {
+    e.target.value = e.target.value.replace(/[^0-9]/g, '').slice(0, 11);
+  });
+
   function getLocation() {
     const status = document.getElementById('geoStatus');
     if (!navigator.geolocation) {
@@ -200,6 +215,13 @@
     const errorMsg = document.getElementById('errorMsg');
     successMsg.style.display = 'none';
     errorMsg.style.display = 'none';
+
+    const phoneValue = document.getElementById('phone').value;
+    if (!/^07[0-9]{9}$/.test(phoneValue)) {
+      document.getElementById('phone').reportValidity();
+      return;
+    }
+
     submitBtn.disabled = true;
     submitBtn.textContent = "جارٍ الإرسال...";
 
