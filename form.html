@@ -130,6 +130,35 @@
   }
   .msg.success { color: var(--accent-dark); }
   .msg.error { color: var(--danger); }
+  .checkbox-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+    margin-top: 4px;
+  }
+  .checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: normal;
+    margin: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: #fdfcf9;
+    cursor: pointer;
+  }
+  .checkbox-item input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+  }
+  #reasonWrapper {
+    display: none;
+  }
 </style>
 </head>
 <body>
@@ -146,9 +175,9 @@
         inputmode="numeric"
         pattern="07[0-9]{9}"
         maxlength="11"
-        placeholder="07712345678"
+        placeholder="07715173456"
         title="يجب أن يتكون الرقم من 11 رقمًا ويبدأ بـ 07">
-      <div class="field-hint">يجب إدخال 11 رقمًا يبدأ بـ 07 مثال: 07712345678</div>
+      <div class="field-hint">يجب إدخال 11 رقمًا يبدأ بـ 07 مثال: 07715173456</div>
 
       <label for="area">المنطقة</label>
       <input type="text" id="area" name="المنطقة" required>
@@ -163,6 +192,37 @@
         <option value="صالح قصي محمد">صالح قصي محمد</option>
         <option value="حيدر محمد عبد">حيدر محمد عبد</option>
       </select>
+
+      <label for="status">حالة الزبون</label>
+      <select id="status" name="حالة الزبون" required>
+        <option value="" disabled selected>اختر الحالة</option>
+        <option value="تم البيع">تم البيع</option>
+        <option value="لديه مخزون">لديه مخزون</option>
+        <option value="لا يريد التعامل معنا">لا يريد التعامل معنا</option>
+      </select>
+
+      <div id="reasonWrapper">
+        <label for="reason">سبب عدم التعامل</label>
+        <select id="reason" name="سبب الرفض">
+          <option value="" disabled selected>اختر السبب</option>
+          <option value="بسبب السعر">بسبب السعر</option>
+          <option value="منتج غير معروف">منتج غير معروف</option>
+          <option value="يتعامل فقط بالستندر">يتعامل فقط بالستندر</option>
+        </select>
+      </div>
+
+      <label>الشركات المنافسة</label>
+      <div class="checkbox-group">
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="توري"> توري</label>
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="بارع"> بارع</label>
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="لميس"> لميس</label>
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="اوتو"> اوتو</label>
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="فاين"> فاين</label>
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="روشن"> روشن</label>
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="الوزير"> الوزير</label>
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="ماس"> ماس</label>
+        <label class="checkbox-item"><input type="checkbox" class="competitor" value="تونسا"> تونسا</label>
+      </div>
 
       <div class="geo-row">
         <button type="button" class="geo-btn" id="geoBtn" onclick="getLocation()">تحديد الموقع 📍</button>
@@ -186,6 +246,21 @@
 
   document.getElementById('phone').addEventListener('input', function (e) {
     e.target.value = e.target.value.replace(/[^0-9]/g, '').slice(0, 11);
+  });
+
+  const statusSelect = document.getElementById('status');
+  const reasonWrapper = document.getElementById('reasonWrapper');
+  const reasonSelect = document.getElementById('reason');
+
+  statusSelect.addEventListener('change', function () {
+    if (statusSelect.value === 'لا يريد التعامل معنا') {
+      reasonWrapper.style.display = 'block';
+      reasonSelect.required = true;
+    } else {
+      reasonWrapper.style.display = 'none';
+      reasonSelect.required = false;
+      reasonSelect.value = '';
+    }
   });
 
   function getLocation() {
@@ -222,22 +297,36 @@
       return;
     }
 
+    if (statusSelect.value === 'لا يريد التعامل معنا' && !reasonSelect.value) {
+      reasonSelect.reportValidity();
+      return;
+    }
+
     submitBtn.disabled = true;
     submitBtn.textContent = "جارٍ الإرسال...";
+
+    const competitors = Array.from(document.querySelectorAll('.competitor:checked'))
+      .map(function (cb) { return cb.value; })
+      .join('، ');
 
     const formData = new FormData();
     formData.append('اسم نقطة البيع', document.getElementById('store').value);
     formData.append('رقم الهاتف', document.getElementById('phone').value);
     formData.append('المنطقة', document.getElementById('area').value);
     formData.append('المندوب', document.getElementById('rep').value);
+    formData.append('حالة الزبون', statusSelect.value);
+    formData.append('سبب الرفض', reasonSelect.value);
+    formData.append('الشركات المنافسة', competitors);
     formData.append('Latitude', document.getElementById('lat').value);
     formData.append('Longitude', document.getElementById('lng').value);
+
 
     fetch(WEB_APP_URL, { method: 'POST', body: formData, mode: 'no-cors' })
       .then(function () {
         successMsg.style.display = 'block';
         document.getElementById('geoForm').reset();
         document.getElementById('geoStatus').textContent = '';
+        reasonWrapper.style.display = 'none';
         submitBtn.textContent = "إرسال البيانات";
       })
       .catch(function () {
