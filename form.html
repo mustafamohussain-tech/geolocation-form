@@ -1049,11 +1049,28 @@
     document.getElementById('lat').value = myLat;
     document.getElementById('lng').value = myLng;
 
-    // Auto-fill the representative from the route screen selection
-    const routeRepValue = document.getElementById('routeRep').value;
+    // Auto-fill the representative from the route screen selection.
+    const routeRepValue = (document.getElementById('routeRep').value || '').trim();
     if (routeRepValue) {
-      document.getElementById('rep').value = routeRepValue;
-      // Refresh the daily visit counter for this rep
+      const repSelect = document.getElementById('rep');
+      let matched = false;
+      // Try an exact match first, then a trimmed/normalized match.
+      for (let i = 0; i < repSelect.options.length; i++) {
+        const optVal = repSelect.options[i].value.trim();
+        if (optVal === routeRepValue || optVal.replace(/\s+/g, '') === routeRepValue.replace(/\s+/g, '')) {
+          repSelect.selectedIndex = i;
+          matched = true;
+          break;
+        }
+      }
+      // If the rep isn't in the dropdown list for some reason, add it so it still shows.
+      if (!matched) {
+        const opt = document.createElement('option');
+        opt.value = routeRepValue;
+        opt.textContent = routeRepValue;
+        repSelect.appendChild(opt);
+        repSelect.value = routeRepValue;
+      }
       if (typeof updateVisitCounter === 'function') updateVisitCounter();
     }
 
