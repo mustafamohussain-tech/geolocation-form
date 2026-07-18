@@ -769,44 +769,100 @@
         status.textContent = '';
         let totalMinutes = 0;
         data.rows.forEach(function (row) {
-          const dur = parseFloat(row['مدة البقاء (دقائق)']) || 0;
-          totalMinutes += dur;
+          let durVal = row['مدة البقاء (دقائق)'];
+          if (durVal === undefined) {
+            const key = Object.keys(row).find(function (k) {
+              return k.replace(/\s+/g, '') === 'مدةالبقاء(دقائق)';
+            });
+            durVal = key !== undefined ? row[key] : 0;
+          }
+          totalMinutes += parseFloat(durVal) || 0;
         });
         summary.textContent = 'عدد الزيارات: ' + data.rows.length +
           ' — إجمالي الوقت: ' + (Math.round(totalMinutes * 10) / 10) + ' دقيقة';
         summary.style.display = 'block';
 
         data.rows.forEach(function (row) {
+          // Tolerant getter: matches a header even if it has extra spaces
+          function field(name) {
+            if (row[name] !== undefined) return row[name];
+            const target = name.replace(/\s+/g, '');
+            const foundKey = Object.keys(row).find(function (k) {
+              return k.replace(/\s+/g, '') === target;
+            });
+            return foundKey !== undefined ? row[foundKey] : '';
+          }
+
           const card = document.createElement('div');
           card.className = 'route-card';
 
           const title = document.createElement('div');
           title.className = 'route-card-title';
-          title.textContent = row['اسم نقطة البيع'] || '';
+          title.textContent = field('اسم نقطة البيع') || '(بدون اسم)';
           card.appendChild(title);
 
           const rep = document.createElement('div');
           rep.className = 'route-card-detail';
-          rep.textContent = '👤 المندوب: ' + (row['المندوب'] || '');
+          rep.textContent = '👤 المندوب: ' + (field('المندوب') || '');
           card.appendChild(rep);
+
+          const phoneVal = field('رقم الهاتف');
+          if (phoneVal) {
+            const ph = document.createElement('div');
+            ph.className = 'route-card-detail';
+            ph.textContent = '📞 الهاتف: ' + phoneVal;
+            card.appendChild(ph);
+          }
 
           const area = document.createElement('div');
           area.className = 'route-card-detail';
-          area.textContent = '📍 المنطقة: ' + (row['المنطقة'] || '');
+          area.textContent = '📍 المنطقة: ' + (field('المنطقة') || '');
           card.appendChild(area);
 
           const dur = document.createElement('div');
           dur.className = 'route-card-detail';
-          dur.textContent = '⏱️ مدة البقاء: ' + (row['مدة البقاء (دقائق)'] || '0') + ' دقيقة';
+          dur.textContent = '⏱️ مدة البقاء: ' + (field('مدة البقاء (دقائق)') || '0') + ' دقيقة';
           card.appendChild(dur);
+
+          const custStatus = field('حالة الزبون');
+          if (custStatus) {
+            const st = document.createElement('div');
+            st.className = 'route-card-detail';
+            st.textContent = '🧾 حالة الزبون: ' + custStatus;
+            card.appendChild(st);
+          }
+
+          const reasonVal = field('سبب الرفض');
+          if (reasonVal) {
+            const rs = document.createElement('div');
+            rs.className = 'route-card-detail';
+            rs.textContent = '❌ سبب الرفض: ' + reasonVal;
+            card.appendChild(rs);
+          }
+
+          const comps = field('الشركات المنافسة');
+          if (comps) {
+            const cp = document.createElement('div');
+            cp.className = 'route-card-detail';
+            cp.textContent = '🏢 الشركات المنافسة: ' + comps;
+            card.appendChild(cp);
+          }
+
+          const notesVal = field('ملاحظات');
+          if (notesVal) {
+            const nt = document.createElement('div');
+            nt.className = 'route-card-detail';
+            nt.textContent = '📝 ملاحظات: ' + notesVal;
+            card.appendChild(nt);
+          }
 
           const time = document.createElement('div');
           time.className = 'route-card-detail';
-          time.textContent = '🕒 وقت الزيارة: ' + (row['Timestamp'] || '');
+          time.textContent = '🕒 وقت الزيارة: ' + (field('Timestamp') || '');
           card.appendChild(time);
 
-          const lat = row['Latitude'];
-          const lng = row['Longitude'];
+          const lat = field('Latitude');
+          const lng = field('Longitude');
           if (lat && lng) {
             const actions = document.createElement('div');
             actions.className = 'route-card-actions';
@@ -986,12 +1042,21 @@
   }
 
   function openVisitFormForPoint(pointName, area, myLat, myLng) {
-    // Switch to the visit form and pre-fill store name + area + coordinates.
+    // Switch to the visit form and pre-fill store name + area + coordinates + rep.
     showView('form');
     document.getElementById('store').value = pointName;
     document.getElementById('area').value = area || '';
     document.getElementById('lat').value = myLat;
     document.getElementById('lng').value = myLng;
+
+    // Auto-fill the representative from the route screen selection
+    const routeRepValue = document.getElementById('routeRep').value;
+    if (routeRepValue) {
+      document.getElementById('rep').value = routeRepValue;
+      // Refresh the daily visit counter for this rep
+      if (typeof updateVisitCounter === 'function') updateVisitCounter();
+    }
+
     document.getElementById('geoStatus').textContent = 'تم تحديد الموقع تلقائيًا لهذه النقطة ✅';
     document.getElementById('submitBtn').disabled = false;
     // trigger stored-store autofill (phone / last visit) for this name
@@ -1249,12 +1314,19 @@
     const phoneToSave = document.getElementById('phone').value;
     const areaToSave = document.getElementById('area').value;
     const repToSave = document.getElementById('rep').value;
+    const visitDetails = {
+      phone: document.getElementById('phone').value,
+      customerStatus: statusSelect.value,
+      reason: reasonSelect.value,
+      competitors: competitors,
+      notes: document.getElementById('notes').value
+    };
 
     fetch(WEB_APP_URL, { method: 'POST', body: formData, mode: 'no-cors' })
       .then(function () {
         saveStore(storeNameToSave, phoneToSave, areaToSave);
         incrementVisit(repToSave);
-        logActivePointVisit(repToSave);
+        logActivePointVisit(repToSave, visitDetails);
         successMsg.textContent = "تم إرسال البيانات بنجاح ✅";
         successMsg.style.display = 'block';
         document.getElementById('geoForm').reset();
@@ -1267,7 +1339,7 @@
       .catch(function () {
         saveStore(storeNameToSave, phoneToSave, areaToSave);
         incrementVisit(repToSave);
-        logActivePointVisit(repToSave);
+        logActivePointVisit(repToSave, visitDetails);
         queueSubmission(formDataToObject(formData));
         successMsg.textContent = "لا يوجد اتصال بالإنترنت حاليًا. تم حفظ البيانات وسيتم إرسالها تلقائيًا عند توفر الاتصال 📶";
         successMsg.style.display = 'block';
@@ -1281,8 +1353,9 @@
   });
 
   // Logs the duration of the active geofenced point visit (if any) to the field-visits sheet.
-  function logActivePointVisit(repName) {
+  function logActivePointVisit(repName, details) {
     if (!activeVisit) return;
+    details = details || {};
     const durationSec = (Date.now() - activeVisit.startTime) / 1000;
     const body = new FormData();
     body.append('action', 'logVisit');
@@ -1290,6 +1363,11 @@
     body.append('pointName', activeVisit.pointName);
     body.append('area', activeVisit.area || '');
     body.append('durationSeconds', String(durationSec));
+    body.append('phone', details.phone || '');
+    body.append('customerStatus', details.customerStatus || '');
+    body.append('reason', details.reason || '');
+    body.append('competitors', details.competitors || '');
+    body.append('notes', details.notes || '');
     body.append('Latitude', activeVisit.lat);
     body.append('Longitude', activeVisit.lng);
     // Fire and forget; no-cors is fine since we don't need to read the response.
