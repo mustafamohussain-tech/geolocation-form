@@ -238,6 +238,10 @@
     margin-top: 12px;
     background: #fdfcf9;
   }
+  .route-card.visited-card {
+    background: #eef7f0;
+    border-color: #b9dcc6;
+  }
   .route-card-title {
     font-size: 15px;
     font-weight: bold;
@@ -680,7 +684,8 @@
         saveBtn.textContent = 'حفظ خط السير لهذا المندوب';
         if (data.result === 'success') {
           saveMsg.className = 'msg success';
-          saveMsg.textContent = 'تم حفظ خط السير بنجاح (' + data.added + ' نقطة) ✅';
+          saveMsg.textContent = 'تم حفظ خط السير بنجاح (' + data.added + ' نقطة)' +
+            (data.replaced > 0 ? ' — تم استبدال خط سير سابق لنفس اليوم' : '') + ' ✅';
           saveMsg.style.display = 'block';
           buildSupervisorPanel();
         } else {
@@ -699,6 +704,45 @@
   }
 
   // --- Reports panel: view field-visit logs, filterable by rep / date / area ---
+  // --- Feature #4: export reports to CSV (opens in Excel) ---
+  let lastReportRows = [];
+
+  function exportReports() {
+    if (!lastReportRows || lastReportRows.length === 0) return;
+
+    // Collect all column keys (excluding internal helper keys starting with _)
+    const keys = [];
+    lastReportRows.forEach(function (row) {
+      Object.keys(row).forEach(function (k) {
+        if (k.charAt(0) !== '_' && keys.indexOf(k) === -1) keys.push(k);
+      });
+    });
+
+    function esc(v) {
+      const s = (v === undefined || v === null) ? '' : String(v);
+      if (s.indexOf('"') !== -1 || s.indexOf(',') !== -1 || s.indexOf('\n') !== -1) {
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    }
+
+    let csv = keys.map(esc).join(',') + '\n';
+    lastReportRows.forEach(function (row) {
+      csv += keys.map(function (k) { return esc(row[k]); }).join(',') + '\n';
+    });
+
+    // BOM so Excel reads Arabic (UTF-8) correctly
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'تقرير_الزيارات_' + getTodayDateStr() + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   function buildReportsPanel() {
     const content = document.getElementById('adminContent');
 
@@ -718,6 +762,7 @@
       '<button type="button" class="submit-btn" onclick="loadReports()">عرض التقارير</button>' +
       '<div class="geo-status" id="repStatus"></div>' +
       '<div id="repSummary" class="visit-counter" style="display:none;"></div>' +
+      '<button type="button" class="submit-btn" id="exportBtn" style="display:none;" onclick="exportReports()">📥 تصدير إلى Excel (CSV)</button>' +
       '<div id="repList"></div>';
 
     // Load areas into the area filter (reuse the areas endpoint)
@@ -763,12 +808,16 @@
         }
         if (!data.rows || data.rows.length === 0) {
           status.textContent = 'لا توجد زيارات مطابقة للفلاتر المختارة';
+          lastReportRows = [];
+          const exportBtn = document.getElementById('exportBtn');
+          if (exportBtn) exportBtn.style.display = 'none';
           return;
         }
 
         status.textContent = '';
         let totalMinutes = 0;
-        data.rows.forEach(function (row) {
+        let shortVisits = 0;
+        function durOf(row) {
           let durVal = row['مدة البقاء (دقائق)'];
           if (durVal === undefined) {
             const key = Object.keys(row).find(function (k) {
@@ -776,11 +825,25 @@
             });
             durVal = key !== undefined ? row[key] : 0;
           }
-          totalMinutes += parseFloat(durVal) || 0;
+          return parseFloat(durVal) || 0;
+        }
+        data.rows.forEach(function (row) {
+          const d = durOf(row);
+          totalMinutes += d;
+          if (d > 0 && d < 1) shortVisits++;
         });
-        summary.textContent = 'عدد الزيارات: ' + data.rows.length +
-          ' — إجمالي الوقت: ' + (Math.round(totalMinutes * 10) / 10) + ' دقيقة';
+        const avgMinutes = data.rows.length > 0 ? (totalMinutes / data.rows.length) : 0;
+        summary.innerHTML =
+          'عدد الزيارات: ' + data.rows.length + '<br>' +
+          'إجمالي الوقت: ' + (Math.round(totalMinutes * 10) / 10) + ' دقيقة<br>' +
+          'متوسط الوقت بكل زيارة: ' + (Math.round(avgMinutes * 10) / 10) + ' دقيقة' +
+          (shortVisits > 0 ? '<br>⚠️ زيارات قصيرة مشبوهة: ' + shortVisits : '');
         summary.style.display = 'block';
+
+        // Keep rows for export (Feature #4)
+        lastReportRows = data.rows;
+        const exportBtn = document.getElementById('exportBtn');
+        if (exportBtn) exportBtn.style.display = 'block';
 
         data.rows.forEach(function (row) {
           // Tolerant getter: matches a header even if it has extra spaces
@@ -821,8 +884,18 @@
 
           const dur = document.createElement('div');
           dur.className = 'route-card-detail';
+          const durMin = parseFloat(field('مدة البقاء (دقائق)')) || 0;
           dur.textContent = '⏱️ مدة البقاء: ' + (field('مدة البقاء (دقائق)') || '0') + ' دقيقة';
           card.appendChild(dur);
+
+          if (durMin > 0 && durMin < 1) {
+            const warn = document.createElement('div');
+            warn.className = 'route-card-detail';
+            warn.style.color = '#b3492f';
+            warn.style.fontWeight = 'bold';
+            warn.textContent = '⚠️ زيارة قصيرة جدًا (أقل من دقيقة)';
+            card.appendChild(warn);
+          }
 
           const custStatus = field('حالة الزبون');
           if (custStatus) {
@@ -892,6 +965,29 @@
     return d.getFullYear() + '-' + mm + '-' + dd;
   }
 
+  // --- Feature #6: mark points as visited (stored locally per rep+date+point) ---
+  const VISITED_KEY = 'visitedPoints';
+
+  function getVisitedMap() {
+    try { return JSON.parse(localStorage.getItem(VISITED_KEY)) || {}; }
+    catch (err) { return {}; }
+  }
+
+  function visitedKey(rep, date, pointName) {
+    return rep + '|' + date + '|' + pointName;
+  }
+
+  function isPointVisited(rep, date, pointName) {
+    const map = getVisitedMap();
+    return !!map[visitedKey(rep, date, pointName)];
+  }
+
+  function markPointVisited(rep, date, pointName) {
+    const map = getVisitedMap();
+    map[visitedKey(rep, date, pointName)] = new Date().toISOString();
+    try { localStorage.setItem(VISITED_KEY, JSON.stringify(map)); } catch (err) { /* ignore */ }
+  }
+
   function loadRoute() {
     const rep = document.getElementById('routeRep').value;
     const status = document.getElementById('routeStatus');
@@ -924,13 +1020,15 @@
         data.rows.forEach(function (row) {
           const lat = row['Latitude'];
           const lng = row['Longitude'];
+          const pointName = row['اسم نقطة البيع'] || '';
+          const alreadyVisited = isPointVisited(rep, selectedDate, pointName);
 
           const card = document.createElement('div');
-          card.className = 'route-card';
+          card.className = 'route-card' + (alreadyVisited ? ' visited-card' : '');
 
           const title = document.createElement('div');
           title.className = 'route-card-title';
-          title.textContent = row['اسم نقطة البيع'] || '';
+          title.textContent = (alreadyVisited ? '✅ ' : '') + pointName;
           card.appendChild(title);
 
           const phone = document.createElement('div');
@@ -972,15 +1070,20 @@
             visitBtn.type = 'button';
             visitBtn.className = 'submit-btn';
             visitBtn.style.marginTop = '10px';
-            visitBtn.textContent = '📝 تسجيل زيارة هذه النقطة';
+            if (alreadyVisited) {
+              visitBtn.textContent = '✅ تمت الزيارة (تسجيل مرة أخرى)';
+              visitBtn.style.opacity = '0.7';
+            } else {
+              visitBtn.textContent = '📝 تسجيل زيارة هذه النقطة';
+            }
             visitBtn.onclick = function () {
-              startPointVisit(row['اسم نقطة البيع'], row['المنطقة'], parseFloat(lat), parseFloat(lng), visitBtn);
+              startPointVisit(pointName, row['المنطقة'], parseFloat(lat), parseFloat(lng), visitBtn);
             };
             card.appendChild(visitBtn);
 
             const visitStatus = document.createElement('div');
             visitStatus.className = 'geo-status';
-            visitStatus.id = 'visitStatus_' + encodeURIComponent(row['اسم نقطة البيع']);
+            visitStatus.id = 'visitStatus_' + encodeURIComponent(pointName);
             card.appendChild(visitStatus);
           }
 
@@ -1032,7 +1135,12 @@
         area: area,
         lat: myLat,
         lng: myLng,
-        startTime: Date.now()
+        officialLat: pLat,
+        officialLng: pLng,
+        distanceAtCheckin: Math.round(dist),
+        startTime: Date.now(),
+        rep: document.getElementById('routeRep').value,
+        date: document.getElementById('routeDate').value || getTodayDateStr()
       };
       statusEl.textContent = 'أنت داخل النطاق (' + Math.round(dist) + ' متر). تم بدء تسجيل الوقت.';
       openVisitFormForPoint(pointName, area, myLat, myLng);
@@ -1374,6 +1482,12 @@
     if (!activeVisit) return;
     details = details || {};
     const durationSec = (Date.now() - activeVisit.startTime) / 1000;
+
+    // Mark this point as visited locally (Feature #6)
+    if (activeVisit.rep && activeVisit.date && activeVisit.pointName) {
+      markPointVisited(activeVisit.rep, activeVisit.date, activeVisit.pointName);
+    }
+
     const body = new FormData();
     body.append('action', 'logVisit');
     body.append('rep', repName || '');
@@ -1387,6 +1501,9 @@
     body.append('notes', details.notes || '');
     body.append('Latitude', activeVisit.lat);
     body.append('Longitude', activeVisit.lng);
+    body.append('officialLat', activeVisit.officialLat != null ? activeVisit.officialLat : '');
+    body.append('officialLng', activeVisit.officialLng != null ? activeVisit.officialLng : '');
+    body.append('distanceAtCheckin', activeVisit.distanceAtCheckin != null ? activeVisit.distanceAtCheckin : '');
     // Fire and forget; no-cors is fine since we don't need to read the response.
     fetch(WEB_APP_URL, { method: 'POST', body: body, mode: 'no-cors' }).catch(function () {});
     activeVisit = null;
