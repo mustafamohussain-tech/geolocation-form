@@ -290,7 +290,7 @@
       <h1>نظام تسجيل الزيارات</h1>
       <p class="sub">اختر ماذا تريد أن تفعل</p>
       <button type="button" class="home-btn" onclick="showView('route')">🗺️ بدء خط سيري لهذا اليوم</button>
-      <button type="button" class="home-btn secondary" onclick="showView('form')">➕ رفع نقطة بيع جديدة</button>
+      <button type="button" class="home-btn secondary" onclick="openNewPointForm()">➕ رفع نقطة بيع جديدة</button>
       <button type="button" class="home-btn admin" onclick="showView('login')">🔐 دخول الإدارة</button>
     </div>
 
@@ -458,6 +458,25 @@
 
   // --- Admin login ---
   let currentAdmin = null; // { username, role, displayName }
+
+  // Opens the "new sale point" form fresh (not a route visit → enable duplicate check)
+  function openNewPointForm() {
+    isRouteVisit = false;
+    activeVisit = null;
+    document.getElementById('geoForm').reset();
+    document.getElementById('phone').disabled = false;
+    document.getElementById('phone').required = true;
+    document.getElementById('phoneCheckHint').style.display = 'none';
+    document.getElementById('lastVisitHint').style.display = 'none';
+    document.getElementById('geoStatus').textContent = '';
+    document.getElementById('reasonWrapper').style.display = 'none';
+    document.getElementById('lat').value = '';
+    document.getElementById('lng').value = '';
+    document.getElementById('submitBtn').disabled = true;
+    phoneIsDuplicate = false;
+    lastCheckedPhone = '';
+    showView('form');
+  }
 
   function doLogin() {
     const user = document.getElementById('loginUser').value.trim();
@@ -1150,7 +1169,9 @@
             const actions = document.createElement('div');
             actions.className = 'route-card-actions';
 
-            const phoneNum = String(row['رقم الهاتف'] || '').replace(/[^0-9]/g, '');
+            let phoneNum = String(row['رقم الهاتف'] || '').replace(/[^0-9]/g, '');
+            // Restore a dropped leading zero (Iraqi mobile numbers start with 07)
+            if (phoneNum.length === 10 && phoneNum.charAt(0) === '7') phoneNum = '0' + phoneNum;
             if (phoneNum) {
               const callLink = document.createElement('a');
               callLink.href = 'tel:' + phoneNum;
@@ -1265,14 +1286,19 @@
 
   function openVisitFormForPoint(pointName, area, myLat, myLng, phone) {
     // Switch to the visit form and pre-fill store name + area + coordinates + rep + phone.
+    isRouteVisit = true; // this is a visit to an existing point → skip duplicate check
     showView('form');
     document.getElementById('store').value = pointName;
     document.getElementById('area').value = area || '';
     document.getElementById('lat').value = myLat;
     document.getElementById('lng').value = myLng;
     if (phone) {
-      document.getElementById('phone').value = String(phone).replace(/[^0-9]/g, '').slice(0, 11);
+      // Keep leading zero: normalize to a 07XXXXXXXXX form.
+      let digits = String(phone).replace(/[^0-9]/g, '');
+      if (digits.length === 10 && digits.charAt(0) === '7') digits = '0' + digits;
+      document.getElementById('phone').value = digits.slice(0, 11);
     }
+    document.getElementById('phoneCheckHint').style.display = 'none';
 
     // Auto-fill the representative from the route screen selection.
     const routeRepValue = (document.getElementById('routeRep').value || '').trim();
@@ -1443,10 +1469,13 @@
   // Check for duplicate phone against the whole system when the field loses focus
   let phoneIsDuplicate = false;
   let lastCheckedPhone = '';
+  let isRouteVisit = false; // true when the form was opened from a route point (skip duplicate check)
   document.getElementById('phone').addEventListener('blur', function () {
     const phone = document.getElementById('phone').value.replace(/[^0-9]/g, '');
     const hint = document.getElementById('phoneCheckHint');
     phoneIsDuplicate = false;
+    // Skip the duplicate check entirely for route visits (existing points).
+    if (isRouteVisit) { hint.style.display = 'none'; return; }
     if (!/^07[0-9]{9}$/.test(phone)) { hint.style.display = 'none'; return; }
     hint.style.color = '#8a8370';
     hint.textContent = 'جارٍ التحقق من الرقم...';
@@ -1572,6 +1601,11 @@
     if (!noPhone) {
       if (!/^07[0-9]{9}$/.test(phoneValue)) {
         document.getElementById('phone').reportValidity();
+        return;
+      }
+      // Route visits (existing points) skip the duplicate check entirely.
+      if (isRouteVisit) {
+        proceedWithSubmit();
         return;
       }
       const phoneDigits = phoneValue.replace(/[^0-9]/g, '');
