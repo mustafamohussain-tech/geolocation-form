@@ -274,6 +274,10 @@
     background: #dff2e4;
     color: #1a7a3c;
   }
+  .call-btn {
+    background: #e6e0f5;
+    color: #4b3b8f;
+  }
 </style>
 </head>
 <body>
@@ -359,6 +363,10 @@
         placeholder="07712345678"
         title="يجب أن يتكون الرقم من 11 رقمًا ويبدأ بـ 07">
       <div class="field-hint">يجب إدخال 11 رقمًا يبدأ بـ 07 مثال: 07712345678</div>
+      <div class="field-hint" id="phoneCheckHint" style="display:none;"></div>
+      <label class="checkbox-item" style="margin-top:8px;">
+        <input type="checkbox" id="noPhone"> الزبون رفض إعطاء رقمه
+      </label>
 
       <label for="area">المنطقة</label>
       <input type="text" id="area" name="المنطقة" required>
@@ -546,7 +554,11 @@
       '<div id="adminPointsList"></div>' +
       '<div id="adminSelectedCount" class="visit-counter" style="display:none;"></div>' +
       '<button type="button" class="submit-btn" id="saveRouteBtn" style="display:none;" onclick="saveRoute()">حفظ خط السير لهذا المندوب</button>' +
-      '<div class="msg success" id="adminSaveMsg"></div>';
+      '<div class="msg success" id="adminSaveMsg"></div>' +
+      '<hr style="margin:22px 0;border:none;border-top:1px solid var(--line);">' +
+      '<button type="button" class="home-btn secondary" onclick="loadCurrentRoute()">📋 عرض خط السير المحفوظ (للتعديل / الحذف)</button>' +
+      '<div class="geo-status" id="currentRouteStatus"></div>' +
+      '<div id="currentRouteList"></div>';
 
     // Default the date to today
     document.getElementById('adminDate').value = getTodayDateStr();
@@ -700,6 +712,98 @@
         saveMsg.className = 'msg error';
         saveMsg.textContent = 'تعذر الاتصال بالخادم';
         saveMsg.style.display = 'block';
+      });
+  }
+
+  // --- View & edit the currently saved route (delete individual points) ---
+  function loadCurrentRoute() {
+    const date = document.getElementById('adminDate').value;
+    const rep = document.getElementById('adminRep').value;
+    const status = document.getElementById('currentRouteStatus');
+    const list = document.getElementById('currentRouteList');
+    list.innerHTML = '';
+
+    if (!date || !rep) {
+      status.textContent = 'اختر التاريخ والمندوب أولاً لعرض خط سيره المحفوظ';
+      return;
+    }
+    status.textContent = 'جارٍ التحميل...';
+
+    fetch(WEB_APP_URL + '?rep=' + encodeURIComponent(rep) + '&date=' + encodeURIComponent(date))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success') {
+          status.textContent = 'حدث خطأ أثناء التحميل';
+          return;
+        }
+        if (!data.rows || data.rows.length === 0) {
+          status.textContent = 'لا يوجد خط سير محفوظ لهذا المندوب في هذا اليوم';
+          return;
+        }
+        status.textContent = 'خط السير المحفوظ (' + data.rows.length + ' نقطة):';
+
+        data.rows.forEach(function (row) {
+          const pointName = row['اسم نقطة البيع'] || '';
+          const card = document.createElement('div');
+          card.className = 'route-card';
+
+          const title = document.createElement('div');
+          title.className = 'route-card-title';
+          title.textContent = pointName;
+          card.appendChild(title);
+
+          const area = document.createElement('div');
+          area.className = 'route-card-detail';
+          area.textContent = '📍 ' + (row['المنطقة'] || '');
+          card.appendChild(area);
+
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'submit-btn';
+          delBtn.style.marginTop = '10px';
+          delBtn.style.background = 'var(--danger)';
+          delBtn.textContent = '🗑️ حذف من خط السير';
+          delBtn.onclick = function () {
+            if (confirm('هل تريد حذف "' + pointName + '" من خط سير ' + rep + ' ليوم ' + date + '؟')) {
+              deleteRoutePoint(date, rep, pointName, delBtn, card, status);
+            }
+          };
+          card.appendChild(delBtn);
+
+          list.appendChild(card);
+        });
+      })
+      .catch(function () {
+        status.textContent = 'تعذر الاتصال بالخادم';
+      });
+  }
+
+  function deleteRoutePoint(date, rep, pointName, btn, card, status) {
+    btn.disabled = true;
+    btn.textContent = 'جارٍ الحذف...';
+
+    const body = new FormData();
+    body.append('action', 'deleteRoutePoint');
+    body.append('date', date);
+    body.append('rep', rep);
+    body.append('pointName', pointName);
+
+    fetch(WEB_APP_URL, { method: 'POST', body: body })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result === 'success' && data.deleted > 0) {
+          card.parentNode.removeChild(card);
+          status.textContent = 'تم حذف النقطة من خط السير ✅';
+        } else {
+          btn.disabled = false;
+          btn.textContent = '🗑️ حذف من خط السير';
+          status.textContent = 'تعذر حذف النقطة';
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = '🗑️ حذف من خط السير';
+        status.textContent = 'تعذر الاتصال بالخادم';
       });
   }
 
@@ -1045,6 +1149,15 @@
             const actions = document.createElement('div');
             actions.className = 'route-card-actions';
 
+            const phoneNum = String(row['رقم الهاتف'] || '').replace(/[^0-9]/g, '');
+            if (phoneNum) {
+              const callLink = document.createElement('a');
+              callLink.href = 'tel:' + phoneNum;
+              callLink.className = 'nav-btn call-btn';
+              callLink.textContent = '📞 اتصال';
+              actions.appendChild(callLink);
+            }
+
             const wazeLink = document.createElement('a');
             wazeLink.href = 'https://waze.com/ul?ll=' + lat + ',' + lng + '&navigate=yes';
             wazeLink.target = '_blank';
@@ -1077,7 +1190,7 @@
               visitBtn.textContent = '📝 تسجيل زيارة هذه النقطة';
             }
             visitBtn.onclick = function () {
-              startPointVisit(pointName, row['المنطقة'], parseFloat(lat), parseFloat(lng), visitBtn);
+              startPointVisit(pointName, row['المنطقة'], parseFloat(lat), parseFloat(lng), visitBtn, row['رقم الهاتف'] || '');
             };
             card.appendChild(visitBtn);
 
@@ -1111,7 +1224,7 @@
   const GEOFENCE_RADIUS_M = 20;
   let activeVisit = null; // { pointName, area, lat, lng, startTime }
 
-  function startPointVisit(pointName, area, pLat, pLng, btn) {
+  function startPointVisit(pointName, area, pLat, pLng, btn, phone) {
     const statusEl = document.getElementById('visitStatus_' + encodeURIComponent(pointName));
     if (!navigator.geolocation) {
       statusEl.textContent = 'المتصفح لا يدعم تحديد الموقع';
@@ -1143,19 +1256,22 @@
         date: document.getElementById('routeDate').value || getTodayDateStr()
       };
       statusEl.textContent = 'أنت داخل النطاق (' + Math.round(dist) + ' متر). تم بدء تسجيل الوقت.';
-      openVisitFormForPoint(pointName, area, myLat, myLng);
+      openVisitFormForPoint(pointName, area, myLat, myLng, phone);
     }, function () {
       statusEl.textContent = 'تعذر تحديد موقعك، تأكد من تفعيل صلاحية الموقع.';
     }, { enableHighAccuracy: true, timeout: 15000 });
   }
 
-  function openVisitFormForPoint(pointName, area, myLat, myLng) {
-    // Switch to the visit form and pre-fill store name + area + coordinates + rep.
+  function openVisitFormForPoint(pointName, area, myLat, myLng, phone) {
+    // Switch to the visit form and pre-fill store name + area + coordinates + rep + phone.
     showView('form');
     document.getElementById('store').value = pointName;
     document.getElementById('area').value = area || '';
     document.getElementById('lat').value = myLat;
     document.getElementById('lng').value = myLng;
+    if (phone) {
+      document.getElementById('phone').value = String(phone).replace(/[^0-9]/g, '').slice(0, 11);
+    }
 
     // Auto-fill the representative from the route screen selection.
     const routeRepValue = (document.getElementById('routeRep').value || '').trim();
@@ -1320,6 +1436,50 @@
 
   document.getElementById('phone').addEventListener('input', function (e) {
     e.target.value = e.target.value.replace(/[^0-9]/g, '').slice(0, 11);
+    document.getElementById('phoneCheckHint').style.display = 'none';
+  });
+
+  // Check for duplicate phone against the whole system when the field loses focus
+  let phoneIsDuplicate = false;
+  let lastCheckedPhone = '';
+  document.getElementById('phone').addEventListener('blur', function () {
+    const phone = document.getElementById('phone').value.replace(/[^0-9]/g, '');
+    const hint = document.getElementById('phoneCheckHint');
+    phoneIsDuplicate = false;
+    if (!/^07[0-9]{9}$/.test(phone)) { hint.style.display = 'none'; return; }
+    hint.style.color = '#8a8370';
+    hint.textContent = 'جارٍ التحقق من الرقم...';
+    hint.style.display = 'block';
+    fetch(WEB_APP_URL + '?action=checkPhone&phone=' + encodeURIComponent(phone))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        lastCheckedPhone = phone;
+        if (data.result === 'success' && data.exists) {
+          phoneIsDuplicate = true;
+          hint.style.color = '#b3492f';
+          hint.textContent = '⚠️ هذا الرقم مسجّل مسبقًا' + (data.storeName ? ' لـ: ' + data.storeName : '');
+        } else {
+          hint.style.color = '#1a7a3c';
+          hint.textContent = '✅ رقم جديد غير مكرر';
+        }
+      })
+      .catch(function () { hint.style.display = 'none'; });
+  });
+
+  // "Customer refused to give phone" toggle: makes the phone field optional
+  document.getElementById('noPhone').addEventListener('change', function () {
+    const phoneInput = document.getElementById('phone');
+    const hint = document.getElementById('phoneCheckHint');
+    if (this.checked) {
+      phoneInput.value = '';
+      phoneInput.required = false;
+      phoneInput.disabled = true;
+      phoneIsDuplicate = false;
+      hint.style.display = 'none';
+    } else {
+      phoneInput.required = true;
+      phoneInput.disabled = false;
+    }
   });
 
   // --- Daily visit counter per representative ---
@@ -1405,11 +1565,66 @@
     successMsg.style.display = 'none';
     errorMsg.style.display = 'none';
 
+    const noPhone = document.getElementById('noPhone').checked;
     const phoneValue = document.getElementById('phone').value;
-    if (!/^07[0-9]{9}$/.test(phoneValue)) {
-      document.getElementById('phone').reportValidity();
-      return;
+
+    if (!noPhone) {
+      if (!/^07[0-9]{9}$/.test(phoneValue)) {
+        document.getElementById('phone').reportValidity();
+        return;
+      }
+      const phoneDigits = phoneValue.replace(/[^0-9]/g, '');
+      // If this exact phone was already verified, use the cached result.
+      if (lastCheckedPhone === phoneDigits) {
+        if (phoneIsDuplicate) {
+          blockDuplicatePhone();
+          return;
+        }
+        proceedWithSubmit();
+      } else {
+        // Not yet verified (e.g. submitted before blur fired): verify now.
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'جارٍ التحقق...';
+        fetch(WEB_APP_URL + '?action=checkPhone&phone=' + encodeURIComponent(phoneDigits))
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'إرسال البيانات';
+            if (data.result === 'success' && data.exists) {
+              phoneIsDuplicate = true;
+              lastCheckedPhone = phoneDigits;
+              blockDuplicatePhone(data.storeName);
+            } else {
+              lastCheckedPhone = phoneDigits;
+              phoneIsDuplicate = false;
+              proceedWithSubmit();
+            }
+          })
+          .catch(function () {
+            // If the check can't run (offline), allow submission to proceed.
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'إرسال البيانات';
+            proceedWithSubmit();
+          });
+      }
+      return; // proceedWithSubmit handles the rest asynchronously
     }
+
+    proceedWithSubmit();
+  });
+
+  function blockDuplicatePhone(storeName) {
+    const hint = document.getElementById('phoneCheckHint');
+    hint.style.color = '#b3492f';
+    hint.textContent = '⚠️ هذا الرقم مسجّل مسبقًا' + (storeName ? ' لـ: ' + storeName : '');
+    hint.style.display = 'block';
+    alert('⚠️ هذا الرقم مسجّل مسبقًا في النظام.\nلا يمكن الإرسال برقم مكرر. يرجى إدخال رقم صحيح، أو تأشير "الزبون رفض إعطاء رقمه".');
+  }
+
+  function proceedWithSubmit() {
+    const submitBtn = document.getElementById('submitBtn');
+    const successMsg = document.getElementById('successMsg');
+    const errorMsg = document.getElementById('errorMsg');
 
     if (statusSelect.value === 'لا يريد التعامل معنا' && !reasonSelect.value) {
       reasonSelect.reportValidity();
@@ -1458,6 +1673,10 @@
         document.getElementById('geoStatus').textContent = '';
         reasonWrapper.style.display = 'none';
         document.getElementById('lastVisitHint').style.display = 'none';
+        document.getElementById('phoneCheckHint').style.display = 'none';
+        document.getElementById('phone').disabled = false;
+        document.getElementById('phone').required = true;
+        phoneIsDuplicate = false;
         submitBtn.disabled = true;
         submitBtn.textContent = "إرسال البيانات";
       })
@@ -1472,10 +1691,14 @@
         document.getElementById('geoStatus').textContent = '';
         reasonWrapper.style.display = 'none';
         document.getElementById('lastVisitHint').style.display = 'none';
+        document.getElementById('phoneCheckHint').style.display = 'none';
+        document.getElementById('phone').disabled = false;
+        document.getElementById('phone').required = true;
+        phoneIsDuplicate = false;
         submitBtn.disabled = true;
         submitBtn.textContent = "إرسال البيانات";
       });
-  });
+  }
 
   // Logs the duration of the active geofenced point visit (if any) to the field-visits sheet.
   function logActivePointVisit(repName, details) {
