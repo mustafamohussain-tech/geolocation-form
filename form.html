@@ -482,9 +482,9 @@
           <div class="hs-lbl">زيارات اليوم</div>
         </div>
         <div class="hero-stat">
-          <div class="hs-ic">📋</div>
-          <div class="hs-num" id="homePointsCount">—</div>
-          <div class="hs-lbl">نقاط محفوظة</div>
+          <div class="hs-ic">➕</div>
+          <div class="hs-num" id="homeUploadsToday">0</div>
+          <div class="hs-lbl">نقاط مرفوعة اليوم</div>
         </div>
       </div>
       <button type="button" class="home-btn" onclick="showView('route')"><span class="hb-ic hb-blue">🗺️</span><span class="hb-txt"><span class="hb-t">خط سيري لهذا اليوم</span><span class="hb-s">نقاط الزيارة المحددة لك</span></span><span class="hb-arrow">‹</span></button>
@@ -510,7 +510,8 @@
 
     <!-- ADMIN PANEL VIEW -->
     <div id="adminView" style="display:none;">
-      <button type="button" class="back-btn" onclick="adminLogout()">🚪 تسجيل الخروج</button>
+      <button type="button" class="back-btn" onclick="showView('home')"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>الرئيسية</button>
+      <button type="button" class="back-btn" onclick="adminLogout()" style="margin-inline-start:8px;">🚪 تسجيل الخروج</button>
       <h1>لوحة الإدارة</h1>
       <p class="sub" id="adminWelcome"></p>
       <div id="adminContent"></div>
@@ -655,6 +656,16 @@
       if (routeDate && !routeDate.value) {
         routeDate.value = getTodayDateStr();
       }
+      // Prefill last chosen rep on this device
+      const routeRep = document.getElementById('routeRep');
+      if (routeRep && !routeRep.value) {
+        const last = localStorage.getItem('lastRep');
+        if (last) {
+          for (let i = 0; i < routeRep.options.length; i++) {
+            if (routeRep.options[i].value === last) { routeRep.selectedIndex = i; break; }
+          }
+        }
+      }
     }
 
     // Update home stat cards
@@ -723,10 +734,12 @@
       Object.keys(vd.reps || {}).forEach(function (r) { total += vd.reps[r]; });
       animateCount(document.getElementById('homeVisitsToday'), total);
     } catch (err) { /* ignore */ }
-    // Number of stores saved locally on this device
+    // New points uploaded today on this device
     try {
-      const stores = getSavedStores();
-      animateCount(document.getElementById('homePointsCount'), Object.keys(stores).length);
+      const ud = getUploadData();
+      let totalUp = 0;
+      Object.keys(ud.reps || {}).forEach(function (r) { totalUp += ud.reps[r]; });
+      animateCount(document.getElementById('homeUploadsToday'), totalUp);
     } catch (err) { /* ignore */ }
   }
 
@@ -763,6 +776,17 @@
     document.getElementById('submitBtn').disabled = true;
     phoneIsDuplicate = false;
     lastCheckedPhone = '';
+    // Prefill last chosen rep on this device
+    try {
+      const last = localStorage.getItem('lastRep');
+      const repSel = document.getElementById('rep');
+      if (last && repSel) {
+        for (let i = 0; i < repSel.options.length; i++) {
+          if (repSel.options[i].value === last) { repSel.selectedIndex = i; break; }
+        }
+        updateVisitCounter();
+      }
+    } catch (e) {}
     showView('form');
   }
 
@@ -823,7 +847,330 @@
     const content = document.getElementById('adminContent');
     content.innerHTML =
       '<button type="button" class="home-btn" onclick="buildSupervisorPanel()">🗺️ تحديد وترتيب خطوط السير</button>' +
-      '<button type="button" class="home-btn secondary" onclick="buildReportsPanel()">📊 عرض تقارير الزيارات الميدانية</button>';
+      '<button type="button" class="home-btn secondary" onclick="buildReportsPanel()">📊 عرض تقارير الزيارات الميدانية</button>' +
+      '<button type="button" class="home-btn admin" onclick="buildProgressPanel()">📈 متابعة تقدّم المندوبين اليومي</button>' +
+      '<button type="button" class="home-btn" onclick="buildPeriodPanel()">📅 تقرير فترة زمنية</button>' +
+      '<button type="button" class="home-btn secondary" onclick="buildNeglectedPanel()">⚠️ النقاط المهملة (تحتاج زيارة)</button>';
+  }
+
+  // --- Period summary report: pick a from/to range ---
+  function buildPeriodPanel() {
+    const content = document.getElementById('adminContent');
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<label for="perFrom">من تاريخ</label>' +
+      '<input type="date" id="perFrom">' +
+      '<label for="perTo">إلى تاريخ</label>' +
+      '<input type="date" id="perTo">' +
+      '<button type="button" class="submit-btn" onclick="loadPeriodSummary()">عرض التقرير</button>' +
+      '<div class="geo-status" id="perStatus"></div>' +
+      '<div id="perResult"></div>';
+
+    // Default: last 7 days
+    const today = new Date();
+    const weekAgo = new Date();
+    weekAgo.setDate(today.getDate() - 7);
+    function fmt(d) {
+      return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+    }
+    document.getElementById('perTo').value = fmt(today);
+    document.getElementById('perFrom').value = fmt(weekAgo);
+  }
+
+  function loadPeriodSummary() {
+    const from = document.getElementById('perFrom').value;
+    const to = document.getElementById('perTo').value;
+    const status = document.getElementById('perStatus');
+    const result = document.getElementById('perResult');
+    result.innerHTML = '';
+
+    if (!from || !to) {
+      status.textContent = 'الرجاء تحديد تاريخ البداية والنهاية';
+      return;
+    }
+    if (from > to) {
+      status.textContent = 'تاريخ البداية يجب أن يكون قبل تاريخ النهاية';
+      return;
+    }
+    status.textContent = 'جارٍ التحميل...';
+
+    fetch(WEB_APP_URL + '?action=periodSummary&from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success') {
+          status.textContent = 'حدث خطأ أثناء التحميل';
+          return;
+        }
+        status.textContent = '';
+
+        const summary = document.createElement('div');
+        summary.className = 'route-card';
+        summary.innerHTML =
+          '<div class="route-card-title">📅 ملخص الفترة ' + data.from + ' ← ' + data.to + '</div>' +
+          '<div class="route-card-detail">🗺️ إجمالي الزيارات الميدانية: <b>' + data.totalVisits + '</b></div>' +
+          '<div class="route-card-detail">⏱️ إجمالي وقت الزيارات: <b>' + data.totalMinutes + '</b> دقيقة</div>' +
+          '<div class="route-card-detail">➕ نقاط جديدة مرفوعة: <b>' + data.newPoints + '</b></div>' +
+          (data.bestRep && data.bestRep.name
+            ? '<div class="route-card-detail">🏆 أفضل مندوب: <b>' + data.bestRep.name + '</b> (' + data.bestRep.count + ' زيارة)</div>'
+            : '') +
+          (data.topArea && data.topArea.name
+            ? '<div class="route-card-detail">📍 أنشط منطقة: <b>' + data.topArea.name + '</b> (' + data.topArea.count + ' زيارة)</div>'
+            : '');
+        result.appendChild(summary);
+
+        // Per-rep breakdown
+        const reps = Object.keys(data.repCounts || {});
+        if (reps.length) {
+          const repCard = document.createElement('div');
+          repCard.className = 'route-card';
+          let html = '<div class="route-card-title">👥 الزيارات حسب المندوب</div>';
+          reps.sort(function (a, b) { return data.repCounts[b] - data.repCounts[a]; })
+            .forEach(function (r) {
+              html += '<div class="route-card-detail">' + r + ': <b>' + data.repCounts[r] + '</b> زيارة</div>';
+            });
+          repCard.innerHTML = html;
+          result.appendChild(repCard);
+        }
+
+        // Per-area breakdown
+        const areas = Object.keys(data.areaCounts || {});
+        if (areas.length) {
+          const areaCard = document.createElement('div');
+          areaCard.className = 'route-card';
+          let html = '<div class="route-card-title">🗂️ الزيارات حسب المنطقة</div>';
+          areas.sort(function (a, b) { return data.areaCounts[b] - data.areaCounts[a]; })
+            .forEach(function (a) {
+              html += '<div class="route-card-detail">' + a + ': <b>' + data.areaCounts[a] + '</b> زيارة</div>';
+            });
+          areaCard.innerHTML = html;
+          result.appendChild(areaCard);
+        }
+
+        if (data.totalVisits === 0 && data.newPoints === 0) {
+          status.textContent = 'لا يوجد نشاط مسجّل في هذه الفترة';
+        }
+      })
+      .catch(function () {
+        status.textContent = 'تعذر الاتصال بالخادم';
+      });
+  }
+
+  // --- Neglected points: not visited for N+ days, addable to a route ---
+  let neglectedSelected = {};
+
+  function buildNeglectedPanel() {
+    const content = document.getElementById('adminContent');
+    neglectedSelected = {};
+
+    let repOptions = '<option value="" disabled selected>اختر المندوب</option>';
+    REP_NAMES.forEach(function (r) {
+      repOptions += '<option value="' + r + '">' + r + '</option>';
+    });
+
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<label for="negDays">النقاط التي لم تُزر منذ (أيام)</label>' +
+      '<input type="tel" id="negDays" value="30" inputmode="numeric" maxlength="3">' +
+      '<button type="button" class="submit-btn" onclick="loadNeglectedPoints()">عرض النقاط المهملة</button>' +
+      '<div class="geo-status" id="negStatus"></div>' +
+      '<div id="negList"></div>' +
+      '<div id="negAssign" style="display:none;">' +
+      '<label for="negRep">إضافة النقاط المختارة لخط سير المندوب</label>' +
+      '<select id="negRep">' + repOptions + '</select>' +
+      '<label for="negDate">بتاريخ</label>' +
+      '<input type="date" id="negDate">' +
+      '<button type="button" class="submit-btn" onclick="assignNeglected()">➕ إضافة لخط السير</button>' +
+      '<div class="msg success" id="negMsg"></div>' +
+      '</div>';
+  }
+
+  function loadNeglectedPoints() {
+    const days = parseInt(document.getElementById('negDays').value, 10) || 30;
+    const status = document.getElementById('negStatus');
+    const list = document.getElementById('negList');
+    const assign = document.getElementById('negAssign');
+    list.innerHTML = '';
+    neglectedSelected = {};
+    assign.style.display = 'none';
+    status.textContent = 'جارٍ التحميل...';
+
+    fetch(WEB_APP_URL + '?action=neglectedPoints&days=' + days)
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success') {
+          status.textContent = 'حدث خطأ أثناء التحميل';
+          return;
+        }
+        if (!data.points || data.points.length === 0) {
+          status.textContent = 'ممتاز! لا توجد نقاط مهملة (كلها مزارة خلال ' + days + ' يوم)';
+          return;
+        }
+        status.textContent = 'عدد النقاط المهملة: ' + data.points.length + ' — أشّر النقاط المطلوب جدولتها';
+        document.getElementById('negDate').value = getTodayDateStr();
+
+        data.points.forEach(function (p) {
+          const name = p['اسم نقطة البيع'];
+          const card = document.createElement('label');
+          card.className = 'checkbox-item';
+          card.style.display = 'flex';
+          card.style.alignItems = 'flex-start';
+          card.style.marginTop = '8px';
+
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.style.marginTop = '3px';
+          cb.addEventListener('change', function () {
+            if (cb.checked) { neglectedSelected[name] = p; }
+            else { delete neglectedSelected[name]; }
+            assign.style.display = Object.keys(neglectedSelected).length ? 'block' : 'none';
+          });
+
+          const info = document.createElement('span');
+          info.style.display = 'flex';
+          info.style.flexDirection = 'column';
+          info.style.gap = '2px';
+          const l1 = document.createElement('span');
+          l1.style.fontWeight = 'bold';
+          l1.textContent = name + (p['المنطقة'] ? ' · ' + p['المنطقة'] : '');
+          const l2 = document.createElement('span');
+          l2.style.fontSize = '11px';
+          l2.style.color = 'var(--text-dim)';
+          l2.style.fontWeight = 'normal';
+          l2.textContent = '🕒 آخر زيارة: ' + (p.lastVisit || 'غير معروفة');
+          info.appendChild(l1);
+          info.appendChild(l2);
+
+          card.appendChild(cb);
+          card.appendChild(info);
+          list.appendChild(card);
+        });
+      })
+      .catch(function () {
+        status.textContent = 'تعذر الاتصال بالخادم';
+      });
+  }
+
+  function assignNeglected() {
+    const rep = document.getElementById('negRep').value;
+    const date = document.getElementById('negDate').value;
+    const msg = document.getElementById('negMsg');
+    msg.style.display = 'none';
+
+    const points = Object.keys(neglectedSelected).map(function (k) { return neglectedSelected[k]; });
+    if (!rep || !date || points.length === 0) {
+      msg.className = 'msg error';
+      msg.textContent = 'اختر المندوب والتاريخ ونقطة واحدة على الأقل';
+      msg.style.display = 'block';
+      return;
+    }
+
+    const body = new FormData();
+    body.append('action', 'saveRoute');
+    body.append('append', '1'); // add to existing route, do not replace
+    body.append('date', date);
+    body.append('rep', rep);
+    body.append('points', JSON.stringify(points));
+
+    fetch(WEB_APP_URL, { method: 'POST', body: body })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result === 'success') {
+          msg.className = 'msg success';
+          msg.textContent = 'تمت إضافة ' + data.added + ' نقطة لخط سير ' + rep + ' ✅';
+          msg.style.display = 'block';
+          showToast('تمت الإضافة لخط السير', 'success');
+          neglectedSelected = {};
+          loadNeglectedPoints();
+        } else {
+          msg.className = 'msg error';
+          msg.textContent = 'حدث خطأ أثناء الإضافة';
+          msg.style.display = 'block';
+        }
+      })
+      .catch(function () {
+        msg.className = 'msg error';
+        msg.textContent = 'تعذر الاتصال بالخادم';
+        msg.style.display = 'block';
+      });
+  }
+
+  // --- Daily progress dashboard: per-rep route completion + uploads ---
+  function buildProgressPanel() {
+    const content = document.getElementById('adminContent');
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<label for="progDate">التاريخ</label>' +
+      '<input type="date" id="progDate">' +
+      '<button type="button" class="submit-btn" onclick="loadDailyProgress()">عرض التقدّم</button>' +
+      '<div class="geo-status" id="progStatus"></div>' +
+      '<div id="progList"></div>';
+    document.getElementById('progDate').value = getTodayDateStr();
+  }
+
+  function loadDailyProgress() {
+    const date = document.getElementById('progDate').value || getTodayDateStr();
+    const status = document.getElementById('progStatus');
+    const list = document.getElementById('progList');
+    list.innerHTML = '';
+    status.textContent = 'جارٍ التحميل...';
+
+    fetch(WEB_APP_URL + '?action=dailyProgress&date=' + encodeURIComponent(date))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success') {
+          status.textContent = 'حدث خطأ أثناء التحميل';
+          return;
+        }
+        if (!data.reps || data.reps.length === 0) {
+          status.textContent = 'لا يوجد نشاط مسجّل في هذا اليوم';
+          return;
+        }
+        status.textContent = 'تقدّم المندوبين ليوم ' + data.date + ':';
+
+        data.reps.forEach(function (r) {
+          const card = document.createElement('div');
+          card.className = 'route-card';
+
+          const title = document.createElement('div');
+          title.className = 'route-card-title';
+          title.textContent = '👤 ' + r.rep;
+          card.appendChild(title);
+
+          const routeLine = document.createElement('div');
+          routeLine.className = 'route-card-detail';
+          if (r.routeTotal > 0) {
+            routeLine.textContent = '🗺️ خط السير: زار ' + r.visited + ' من ' + r.routeTotal +
+              ' — باقي ' + r.remaining + ' نقطة';
+          } else {
+            routeLine.textContent = '🗺️ لا يوجد خط سير محدد له في هذا اليوم' +
+              (r.visited > 0 ? ' (سجّل ' + r.visited + ' زيارة)' : '');
+          }
+          card.appendChild(routeLine);
+
+          const upLine = document.createElement('div');
+          upLine.className = 'route-card-detail';
+          upLine.textContent = '➕ نقاط رفعها هذا اليوم: ' + r.uploaded;
+          card.appendChild(upLine);
+
+          // Small progress bar per rep
+          if (r.routeTotal > 0) {
+            const pct = Math.round((r.visited / r.routeTotal) * 100);
+            const barWrap = document.createElement('div');
+            barWrap.className = 'rp-bar';
+            barWrap.style.marginTop = '9px';
+            const fill = document.createElement('div');
+            fill.className = 'rp-fill';
+            fill.style.width = pct + '%';
+            barWrap.appendChild(fill);
+            card.appendChild(barWrap);
+          }
+
+          list.appendChild(card);
+        });
+      })
+      .catch(function () {
+        status.textContent = 'تعذر الاتصال بالخادم';
+      });
   }
 
   function adminLogout() {
@@ -1217,36 +1564,46 @@
       '<select id="repRep">' + repOptions + '</select>' +
       '<label for="repDate">التاريخ (اتركه فارغًا لعرض كل الأيام)</label>' +
       '<input type="date" id="repDate">' +
-      '<label for="repArea">المنطقة</label>' +
-      '<select id="repArea"><option value="">جارٍ تحميل المناطق...</option></select>' +
+      '<label>المناطق (اختر منطقة أو أكثر — اتركها كلها فارغة لعرض كل المناطق)</label>' +
+      '<div id="repAreas" class="checkbox-group"><span class="field-hint">جارٍ تحميل المناطق...</span></div>' +
       '<button type="button" class="submit-btn" onclick="loadReports()">عرض التقارير</button>' +
       '<div class="geo-status" id="repStatus"></div>' +
       '<div id="repSummary" class="visit-counter" style="display:none;"></div>' +
       '<button type="button" class="submit-btn" id="exportBtn" style="display:none;" onclick="exportReports()">📥 تصدير إلى Excel (CSV)</button>' +
       '<div id="repList"></div>';
 
-    // Load areas into the area filter (reuse the areas endpoint)
+    // Load areas into the multi-select checkbox group
     fetch(WEB_APP_URL + '?action=areas')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        const areaSelect = document.getElementById('repArea');
-        let opts = '<option value="">كل المناطق</option>';
-        if (data.result === 'success' && data.areas) {
+        const box = document.getElementById('repAreas');
+        box.innerHTML = '';
+        if (data.result === 'success' && data.areas && data.areas.length) {
           data.areas.forEach(function (a) {
-            opts += '<option value="' + a + '">' + a + '</option>';
+            const lbl = document.createElement('label');
+            lbl.className = 'checkbox-item';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.className = 'rep-area-cb';
+            cb.value = a;
+            lbl.appendChild(cb);
+            lbl.appendChild(document.createTextNode(' ' + a));
+            box.appendChild(lbl);
           });
+        } else {
+          box.innerHTML = '<span class="field-hint">لا توجد مناطق مسجلة بعد</span>';
         }
-        areaSelect.innerHTML = opts;
       })
       .catch(function () {
-        document.getElementById('repArea').innerHTML = '<option value="">كل المناطق</option>';
+        document.getElementById('repAreas').innerHTML = '<span class="field-hint">تعذر تحميل المناطق</span>';
       });
   }
 
   function loadReports() {
     const rep = document.getElementById('repRep').value;
     const date = document.getElementById('repDate').value;
-    const area = document.getElementById('repArea').value;
+    const areas = Array.from(document.querySelectorAll('.rep-area-cb:checked'))
+      .map(function (cb) { return cb.value; });
     const status = document.getElementById('repStatus');
     const summary = document.getElementById('repSummary');
     const list = document.getElementById('repList');
@@ -1257,7 +1614,7 @@
     let url = WEB_APP_URL + '?action=reports';
     if (rep) url += '&rep=' + encodeURIComponent(rep);
     if (date) url += '&date=' + encodeURIComponent(date);
-    if (area) url += '&area=' + encodeURIComponent(area);
+    if (areas.length) url += '&areas=' + encodeURIComponent(areas.join(','));
 
     fetch(url)
       .then(function (res) { return res.json(); })
@@ -1475,28 +1832,32 @@
           status.textContent = 'لا توجد نقاط مسجلة لك اليوم';
           return;
         }
-        status.textContent = 'عدد النقاط المطلوبة اليوم: ' + data.rows.length;
+        // Render function: progress bar + point cards (rows may be distance-sorted)
+        function renderRouteRows(rows, sortedByDistance) {
+          list.innerHTML = '';
+          status.textContent = 'عدد النقاط المطلوبة اليوم: ' + rows.length +
+            (sortedByDistance ? ' — مرتبة من الأقرب إليك 📏' : '');
 
-        // Compute how many are already visited for the progress bar
-        let visitedCount = 0;
-        data.rows.forEach(function (row) {
-          if (isPointVisited(rep, selectedDate, row['اسم نقطة البيع'] || '')) visitedCount++;
-        });
-        const pct = data.rows.length > 0 ? Math.round((visitedCount / data.rows.length) * 100) : 0;
-        const progress = document.createElement('div');
-        progress.className = 'route-progress';
-        progress.innerHTML =
-          '<div class="rp-head"><span>تقدّم خط السير</span>' +
-          '<span class="rp-done">' + visitedCount + ' من ' + data.rows.length + '</span></div>' +
-          '<div class="rp-bar"><div class="rp-fill" id="rpFill"></div></div>';
-        list.appendChild(progress);
-        // animate fill after insertion
-        setTimeout(function () {
-          const f = document.getElementById('rpFill');
-          if (f) f.style.width = pct + '%';
-        }, 60);
+          // Compute how many are already visited for the progress bar
+          let visitedCount = 0;
+          rows.forEach(function (row) {
+            if (isPointVisited(rep, selectedDate, row['اسم نقطة البيع'] || '')) visitedCount++;
+          });
+          const pct = rows.length > 0 ? Math.round((visitedCount / rows.length) * 100) : 0;
+          const progress = document.createElement('div');
+          progress.className = 'route-progress';
+          progress.innerHTML =
+            '<div class="rp-head"><span>تقدّم خط السير</span>' +
+            '<span class="rp-done">' + visitedCount + ' من ' + rows.length + '</span></div>' +
+            '<div class="rp-bar"><div class="rp-fill" id="rpFill"></div></div>';
+          list.appendChild(progress);
+          // animate fill after insertion
+          setTimeout(function () {
+            const f = document.getElementById('rpFill');
+            if (f) f.style.width = pct + '%';
+          }, 60);
 
-        data.rows.forEach(function (row) {
+          rows.forEach(function (row) {
           const lat = row['Latitude'];
           const lng = row['Longitude'];
           const pointName = row['اسم نقطة البيع'] || '';
@@ -1519,6 +1880,19 @@
           area.className = 'route-card-detail';
           area.textContent = '📍 ' + (row['المنطقة'] || '');
           card.appendChild(area);
+
+          // Distance from the rep's current position (when sorted by distance)
+          if (row._dist !== undefined && isFinite(row._dist)) {
+            const distEl = document.createElement('div');
+            distEl.className = 'route-card-detail';
+            distEl.style.color = 'var(--accent)';
+            distEl.style.fontWeight = '600';
+            distEl.textContent = '📏 يبعد عنك: ' +
+              (row._dist < 1000
+                ? Math.round(row._dist) + ' متر'
+                : (Math.round(row._dist / 100) / 10) + ' كم');
+            card.appendChild(distEl);
+          }
 
           if (lat && lng) {
             const actions = document.createElement('div');
@@ -1579,6 +1953,28 @@
 
           list.appendChild(card);
         });
+        } // end renderRouteRows
+
+        // Try to get the rep's position to sort points nearest-first
+        if (navigator.geolocation) {
+          status.textContent = 'جارٍ ترتيب النقاط حسب الأقرب إليك...';
+          navigator.geolocation.getCurrentPosition(function (pos) {
+            const myLat = pos.coords.latitude;
+            const myLng = pos.coords.longitude;
+            data.rows.forEach(function (row) {
+              const la = parseFloat(row['Latitude']);
+              const ln = parseFloat(row['Longitude']);
+              row._dist = (isFinite(la) && isFinite(ln)) ? distanceMeters(myLat, myLng, la, ln) : Infinity;
+            });
+            data.rows.sort(function (a, b) { return a._dist - b._dist; });
+            renderRouteRows(data.rows, true);
+          }, function () {
+            // Location unavailable: show unsorted
+            renderRouteRows(data.rows, false);
+          }, { enableHighAccuracy: true, timeout: 10000 });
+        } else {
+          renderRouteRows(data.rows, false);
+        }
       })
       .catch(function () {
         status.textContent = 'تعذر تحميل خط السير، تأكد من توفر الإنترنت';
@@ -1872,6 +2268,7 @@
 
   // --- Daily visit counter per representative ---
   const VISITS_KEY = 'dailyVisits';
+  const UPLOADS_KEY = 'dailyUploads';
 
   function getTodayKey() {
     const d = new Date();
@@ -1886,12 +2283,29 @@
     return { date: getTodayKey(), reps: {} };
   }
 
+  function getUploadData() {
+    try {
+      const data = JSON.parse(localStorage.getItem(UPLOADS_KEY));
+      if (data && data.date === getTodayKey()) return data;
+    } catch (err) { /* ignore */ }
+    return { date: getTodayKey(), reps: {} };
+  }
+
+  function incrementUpload(repName) {
+    if (!repName) return;
+    const data = getUploadData();
+    data.reps[repName] = (data.reps[repName] || 0) + 1;
+    try { localStorage.setItem(UPLOADS_KEY, JSON.stringify(data)); } catch (err) { /* ignore */ }
+  }
+
   function incrementVisit(repName) {
     if (!repName) return;
     const data = getVisitData();
     data.reps[repName] = (data.reps[repName] || 0) + 1;
     try { localStorage.setItem(VISITS_KEY, JSON.stringify(data)); } catch (err) { /* ignore */ }
     updateVisitCounter();
+    // Count new-point uploads separately (route visits excluded)
+    if (!isRouteVisit) incrementUpload(repName);
   }
 
   function updateVisitCounter() {
@@ -1907,7 +2321,14 @@
     badge.style.display = 'block';
   }
 
-  document.getElementById('rep').addEventListener('change', updateVisitCounter);
+  document.getElementById('rep').addEventListener('change', function () {
+    updateVisitCounter();
+    if (this.value) { try { localStorage.setItem('lastRep', this.value); } catch (e) {} }
+  });
+
+  document.getElementById('routeRep').addEventListener('change', function () {
+    if (this.value) { try { localStorage.setItem('lastRep', this.value); } catch (e) {} }
+  });
   updateVisitCounter();
 
   const statusSelect = document.getElementById('status');
