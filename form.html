@@ -457,6 +457,43 @@
   .spinner-el { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.25);
     border-top-color: #fff; border-radius: 50%; display: inline-block; vertical-align: -3px;
     animation: spin 0.8s linear infinite; }
+
+  /* Searchable multi-select area picker (chips) */
+  .chips-box {
+    display: flex; flex-wrap: wrap; gap: 7px; align-items: center;
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px;
+    padding: 9px 11px; min-height: 50px; cursor: text;
+  }
+  .chips-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--accent); color: #fff; font-size: 13.5px; font-weight: 600;
+    padding: 6px 11px; border-radius: 20px; animation: fadeUp 0.25s;
+  }
+  .chip .chip-x {
+    cursor: pointer; font-weight: 700; font-size: 15px; line-height: 1;
+    opacity: 0.85; padding: 0 2px;
+  }
+  .chip .chip-x:hover { opacity: 1; }
+  .chips-input {
+    flex: 1; min-width: 110px; border: none !important; outline: none; box-shadow: none !important;
+    background: transparent !important; font-size: 15px; font-family: inherit; color: var(--text);
+    padding: 6px 2px !important;
+  }
+  .chips-dd {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    margin-top: 6px; max-height: 210px; overflow-y: auto; display: none;
+    box-shadow: 0 10px 24px -12px rgba(0,0,0,0.25);
+  }
+  .chips-dd.open { display: block; }
+  .chips-dd-item {
+    padding: 12px 14px; font-size: 14.5px; cursor: pointer;
+    border-bottom: 1px solid var(--line-soft);
+    transition: background 0.15s;
+  }
+  .chips-dd-item:last-child { border-bottom: none; }
+  .chips-dd-item:hover { background: var(--card-hi); }
+  .chips-dd-empty { padding: 12px 14px; font-size: 13px; color: var(--text-mute); }
 </style>
 </head>
 <body>
@@ -843,6 +880,124 @@
     showView('admin');
   }
 
+  // --- Reusable searchable multi-select area picker (chips) ---
+  let cachedAreas = null;
+  const areaPickers = {}; // boxId -> { selected: {name:true} }
+
+  function fetchAreasOnce(cb) {
+    if (cachedAreas) { cb(cachedAreas); return; }
+    fetch(WEB_APP_URL + '?action=areas')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        cachedAreas = (data.result === 'success' && data.areas) ? data.areas : [];
+        cb(cachedAreas);
+      })
+      .catch(function () { cb([]); });
+  }
+
+  function initAreaPicker(boxId, placeholder) {
+    const box = document.getElementById(boxId);
+    if (!box) return;
+    areaPickers[boxId] = { selected: {} };
+
+    box.innerHTML = '';
+    box.className = '';
+
+    const chipsBox = document.createElement('div');
+    chipsBox.className = 'chips-box';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'chips-input';
+    input.placeholder = placeholder || 'اكتب اسم المنطقة للبحث...';
+    input.autocomplete = 'off';
+    chipsBox.appendChild(input);
+
+    const dd = document.createElement('div');
+    dd.className = 'chips-dd';
+
+    box.appendChild(chipsBox);
+    box.appendChild(dd);
+
+    function renderChips() {
+      // remove existing chips (keep input)
+      Array.prototype.slice.call(chipsBox.querySelectorAll('.chip')).forEach(function (c) { c.remove(); });
+      Object.keys(areaPickers[boxId].selected).forEach(function (name) {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        const txt = document.createElement('span');
+        txt.textContent = name;
+        const x = document.createElement('span');
+        x.className = 'chip-x';
+        x.textContent = '×';
+        x.onclick = function (ev) {
+          ev.stopPropagation();
+          delete areaPickers[boxId].selected[name];
+          renderChips();
+          renderDropdown(input.value);
+        };
+        chip.appendChild(txt);
+        chip.appendChild(x);
+        chipsBox.insertBefore(chip, input);
+      });
+    }
+
+    function renderDropdown(query) {
+      fetchAreasOnce(function (areas) {
+        const q = String(query || '').trim();
+        const sel = areaPickers[boxId].selected;
+        const matches = areas.filter(function (a) {
+          return !sel[a] && (!q || a.indexOf(q) !== -1);
+        });
+        dd.innerHTML = '';
+        if (matches.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'chips-dd-empty';
+          empty.textContent = q ? 'لا توجد منطقة مطابقة لـ "' + q + '"' : 'لا توجد مناطق أخرى';
+          dd.appendChild(empty);
+        } else {
+          matches.forEach(function (a) {
+            const item = document.createElement('div');
+            item.className = 'chips-dd-item';
+            item.textContent = '📍 ' + a;
+            item.onclick = function () {
+              areaPickers[boxId].selected[a] = true;
+              input.value = '';
+              renderChips();
+              renderDropdown('');
+              input.focus();
+            };
+            dd.appendChild(item);
+          });
+        }
+        dd.classList.add('open');
+      });
+    }
+
+    chipsBox.addEventListener('click', function () { input.focus(); });
+    input.addEventListener('focus', function () { renderDropdown(input.value); });
+    input.addEventListener('input', function () { renderDropdown(input.value); });
+    input.addEventListener('keydown', function (ev) {
+      // Backspace on empty input removes the last chip
+      if (ev.key === 'Backspace' && !input.value) {
+        const keys = Object.keys(areaPickers[boxId].selected);
+        if (keys.length) {
+          delete areaPickers[boxId].selected[keys[keys.length - 1]];
+          renderChips();
+          renderDropdown('');
+        }
+      }
+    });
+    // Close the dropdown when tapping outside
+    document.addEventListener('click', function (ev) {
+      if (!box.contains(ev.target)) dd.classList.remove('open');
+    });
+  }
+
+  function getPickerAreas(boxId) {
+    if (!areaPickers[boxId]) return [];
+    return Object.keys(areaPickers[boxId].selected);
+  }
+
   function buildAdminMenu() {
     const content = document.getElementById('adminContent');
     content.innerHTML =
@@ -1202,10 +1357,10 @@
       '<input type="date" id="adminDate">' +
       '<label for="adminRep">المندوب</label>' +
       '<select id="adminRep">' + repOptions + '</select>' +
-      '<label for="adminArea">المنطقة</label>' +
-      '<select id="adminArea"><option value="" disabled selected>جارٍ تحميل المناطق...</option></select>' +
-      '<button type="button" class="submit-btn" onclick="loadAreaPoints()">عرض نقاط هذه المنطقة</button>' +
-      '<div class="field-hint" style="margin-top:8px;">يمكنك اختيار نقاط من عدة مناطق: اختر منطقة وحدد نقاطها، ثم اختر منطقة أخرى وأضف نقاطها — كل النقاط المختارة تُجمع في خط سير واحد.</div>' +
+      '<label>المناطق (اكتب للبحث واختر منطقة أو أكثر)</label>' +
+      '<div id="areaPickerRoute"></div>' +
+      '<button type="button" class="submit-btn" onclick="loadAreaPoints()">عرض نقاط المناطق المختارة</button>' +
+      '<div class="field-hint" style="margin-top:8px;">اختر منطقة أو أكثر من الشريط أعلاه — كل النقاط التي تحددها تُجمع في خط سير واحد.</div>' +
       '<div class="geo-status" id="adminStatus"></div>' +
       '<div id="adminPointsList"></div>' +
       '<div id="adminSelectedCount" class="visit-counter" style="display:none;"></div>' +
@@ -1219,45 +1374,25 @@
     // Default the date to today
     document.getElementById('adminDate').value = getTodayDateStr();
 
-    // Load the available areas
-    loadAreas();
-  }
-
-  function loadAreas() {
-    const areaSelect = document.getElementById('adminArea');
-    fetch(WEB_APP_URL + '?action=areas')
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        if (data.result === 'success' && data.areas) {
-          let opts = '<option value="" disabled selected>اختر المنطقة</option>';
-          data.areas.forEach(function (a) {
-            opts += '<option value="' + a + '">' + a + '</option>';
-          });
-          areaSelect.innerHTML = opts;
-        } else {
-          areaSelect.innerHTML = '<option value="" disabled selected>تعذر تحميل المناطق</option>';
-        }
-      })
-      .catch(function () {
-        areaSelect.innerHTML = '<option value="" disabled selected>تعذر الاتصال</option>';
-      });
+    // Initialize the searchable area picker
+    initAreaPicker('areaPickerRoute', 'اكتب اسم المنطقة للبحث...');
   }
 
   function loadAreaPoints() {
-    const area = document.getElementById('adminArea').value;
+    const areas = getPickerAreas('areaPickerRoute');
     const status = document.getElementById('adminStatus');
     const list = document.getElementById('adminPointsList');
     list.innerHTML = '';
     // NOTE: we do NOT clear selectedPoints here, so the supervisor can
-    // accumulate points from several areas into one route.
+    // accumulate points across loads into one route.
 
-    if (!area) {
-      status.textContent = 'الرجاء اختيار المنطقة أولاً';
+    if (areas.length === 0) {
+      status.textContent = 'الرجاء اختيار منطقة واحدة على الأقل من شريط المناطق';
       return;
     }
     status.textContent = 'جارٍ التحميل...';
 
-    fetch(WEB_APP_URL + '?action=points&area=' + encodeURIComponent(area))
+    fetch(WEB_APP_URL + '?action=points&areas=' + encodeURIComponent(areas.join(',')))
       .then(function (res) { return res.json(); })
       .then(function (data) {
         if (data.result !== 'success') {
@@ -1265,28 +1400,28 @@
           return;
         }
         if (!data.points || data.points.length === 0) {
-          status.textContent = 'لا توجد نقاط مسجلة في هذه المنطقة';
+          status.textContent = 'لا توجد نقاط مسجلة في المناطق المختارة';
           return;
         }
-        status.textContent = 'منطقة ' + area + ' — عدد النقاط: ' + data.points.length;
+        status.textContent = 'المناطق: ' + areas.join('، ') + ' — عدد النقاط: ' + data.points.length;
 
-        // "Select all in this area" button
+        // "Select all shown points" button
         const selectAllBtn = document.createElement('button');
         selectAllBtn.type = 'button';
         selectAllBtn.className = 'home-btn secondary';
         selectAllBtn.style.marginTop = '10px';
-        selectAllBtn.textContent = '✔️ تحديد كل نقاط هذه المنطقة';
+        selectAllBtn.textContent = '✔️ تحديد كل النقاط المعروضة';
         selectAllBtn.onclick = function () {
           data.points.forEach(function (p) {
             selectedPoints[p['اسم نقطة البيع']] = p;
           });
           // re-render to reflect all checked
-          renderAreaPoints(data.points, area, list);
+          renderAreaPoints(data.points, '', list);
           updateSelectedCount();
         };
         list.appendChild(selectAllBtn);
 
-        renderAreaPoints(data.points, area, list);
+        renderAreaPoints(data.points, '', list);
         updateSelectedCount();
       })
       .catch(function () {
@@ -1564,46 +1699,22 @@
       '<select id="repRep">' + repOptions + '</select>' +
       '<label for="repDate">التاريخ (اتركه فارغًا لعرض كل الأيام)</label>' +
       '<input type="date" id="repDate">' +
-      '<label>المناطق (اختر منطقة أو أكثر — اتركها كلها فارغة لعرض كل المناطق)</label>' +
-      '<div id="repAreas" class="checkbox-group"><span class="field-hint">جارٍ تحميل المناطق...</span></div>' +
+      '<label>المناطق (اكتب للبحث واختر منطقة أو أكثر — اتركها فارغة لعرض كل المناطق)</label>' +
+      '<div id="areaPickerReports"></div>' +
       '<button type="button" class="submit-btn" onclick="loadReports()">عرض التقارير</button>' +
       '<div class="geo-status" id="repStatus"></div>' +
       '<div id="repSummary" class="visit-counter" style="display:none;"></div>' +
       '<button type="button" class="submit-btn" id="exportBtn" style="display:none;" onclick="exportReports()">📥 تصدير إلى Excel (CSV)</button>' +
       '<div id="repList"></div>';
 
-    // Load areas into the multi-select checkbox group
-    fetch(WEB_APP_URL + '?action=areas')
-      .then(function (res) { return res.json(); })
-      .then(function (data) {
-        const box = document.getElementById('repAreas');
-        box.innerHTML = '';
-        if (data.result === 'success' && data.areas && data.areas.length) {
-          data.areas.forEach(function (a) {
-            const lbl = document.createElement('label');
-            lbl.className = 'checkbox-item';
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.className = 'rep-area-cb';
-            cb.value = a;
-            lbl.appendChild(cb);
-            lbl.appendChild(document.createTextNode(' ' + a));
-            box.appendChild(lbl);
-          });
-        } else {
-          box.innerHTML = '<span class="field-hint">لا توجد مناطق مسجلة بعد</span>';
-        }
-      })
-      .catch(function () {
-        document.getElementById('repAreas').innerHTML = '<span class="field-hint">تعذر تحميل المناطق</span>';
-      });
+    // Initialize the searchable area picker for reports
+    initAreaPicker('areaPickerReports', 'اكتب اسم المنطقة للبحث...');
   }
 
   function loadReports() {
     const rep = document.getElementById('repRep').value;
     const date = document.getElementById('repDate').value;
-    const areas = Array.from(document.querySelectorAll('.rep-area-cb:checked'))
-      .map(function (cb) { return cb.value; });
+    const areas = getPickerAreas('areaPickerReports');
     const status = document.getElementById('repStatus');
     const summary = document.getElementById('repSummary');
     const list = document.getElementById('repList');
