@@ -904,7 +904,12 @@
     const welcome = document.getElementById('adminWelcome');
     welcome.textContent = 'مرحبًا ' + (currentAdmin.displayName || currentAdmin.username) +
       ' — الصلاحية: ' + (currentAdmin.role || 'غير محددة');
-    buildAdminMenu();
+
+    if (isPromoter()) {
+      buildPromoterRouteView();
+    } else {
+      buildAdminMenu();
+    }
     showView('admin');
   }
 
@@ -1081,9 +1086,19 @@
     return String(currentAdmin.role || '').trim() === 'المالك';
   }
 
+  function isMarketingManager() {
+    if (!currentAdmin) return false;
+    return String(currentAdmin.role || '').trim() === 'مدير تسويق';
+  }
+
+  function isPromoter() {
+    if (!currentAdmin) return false;
+    return String(currentAdmin.role || '').trim() === 'مروج';
+  }
+
   // Route planning and neglected-points scheduling: supervisor + management
   function canPlan() {
-    return !!currentAdmin && !isOwner();
+    return !!currentAdmin && !isOwner() && !isMarketingManager() && !isPromoter();
   }
 
   function buildCompetitorsPanel() {
@@ -1226,6 +1241,561 @@
       });
   }
 
+  // --- Report: stores that need a promoter ---
+  let promoterRows = [];
+
+  function buildPromoterPanel() {
+    const content = document.getElementById('adminContent');
+    promoterRows = [];
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<h2 style="font-size:16px;margin-bottom:4px;">🧍 المتاجر التي تحتاج مروّج</h2>' +
+      '<p class="field-hint" style="margin-bottom:10px;">المتاجر التي أشّر عليها المندوبون بأنها تحتاج مروّج.</p>' +
+      '<label>تصفية حسب المناطق (اتركها فارغة لعرض الكل)</label>' +
+      '<div id="areaPickerPromoter"></div>' +
+      '<button type="button" class="submit-btn" onclick="loadPromoterPoints()">عرض التقرير</button>' +
+      '<div class="geo-status" id="promStatus"></div>' +
+      '<div id="promSummary" class="visit-counter" style="display:none;"></div>' +
+      '<button type="button" class="submit-btn" id="promExportBtn" style="display:none;" onclick="exportPromoterReport()">📥 تصدير إلى Excel (CSV)</button>' +
+      '<div id="promList"></div>';
+
+    initAreaPicker('areaPickerPromoter', 'اكتب اسم المنطقة للبحث...');
+  }
+
+  function loadPromoterPoints() {
+    const areas = getPickerAreas('areaPickerPromoter');
+    const status = document.getElementById('promStatus');
+    const summary = document.getElementById('promSummary');
+    const list = document.getElementById('promList');
+    list.innerHTML = '';
+    summary.style.display = 'none';
+    document.getElementById('promExportBtn').style.display = 'none';
+    status.textContent = 'جارٍ التحميل...';
+
+    let url = WEB_APP_URL + '?action=promoterPoints';
+    if (areas.length) url += '&areas=' + encodeURIComponent(areas.join(','));
+
+    fetch(url)
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success') {
+          status.textContent = 'حدث خطأ أثناء التحميل';
+          return;
+        }
+        promoterRows = data.points || [];
+        if (promoterRows.length === 0) {
+          status.textContent = 'لا توجد متاجر مؤشّر عليها بالحاجة إلى مروّج';
+          return;
+        }
+        status.textContent = '';
+        summary.textContent = 'عدد المتاجر التي تحتاج مروّج: ' + promoterRows.length;
+        summary.style.display = 'block';
+        document.getElementById('promExportBtn').style.display = 'block';
+
+        promoterRows.forEach(function (p) {
+          const card = document.createElement('div');
+          card.className = 'route-card';
+
+          const title = document.createElement('div');
+          title.className = 'route-card-title';
+          title.textContent = '🧍 ' + (p['اسم نقطة البيع'] || '(بدون اسم)');
+          card.appendChild(title);
+
+          if (p['المنطقة']) {
+            const a = document.createElement('div');
+            a.className = 'route-card-detail';
+            a.textContent = '📍 المنطقة: ' + p['المنطقة'];
+            card.appendChild(a);
+          }
+
+          let phoneNum = String(p['رقم الهاتف'] || '').replace(/[^0-9]/g, '');
+          if (phoneNum.length === 10 && phoneNum.charAt(0) === '7') phoneNum = '0' + phoneNum;
+          if (phoneNum) {
+            const ph = document.createElement('div');
+            ph.className = 'route-card-detail';
+            ph.textContent = '📞 الهاتف: ' + phoneNum;
+            card.appendChild(ph);
+          }
+
+          if (p['آخر زيارة']) {
+            const lv = document.createElement('div');
+            lv.className = 'route-card-detail';
+            lv.textContent = '🕒 آخر زيارة: ' + p['آخر زيارة'] +
+              (p['المندوب'] ? ' · ' + p['المندوب'] : '');
+            card.appendChild(lv);
+          }
+
+          const actions = document.createElement('div');
+          actions.className = 'route-card-actions';
+          if (phoneNum) {
+            const call = document.createElement('a');
+            call.href = 'tel:' + phoneNum;
+            call.className = 'nav-btn call-btn';
+            call.textContent = '📞 اتصال';
+            actions.appendChild(call);
+          }
+          if (p.Latitude && p.Longitude) {
+            const map = document.createElement('a');
+            map.href = 'https://maps.google.com/?q=' + p.Latitude + ',' + p.Longitude;
+            map.target = '_blank';
+            map.rel = 'noopener';
+            map.className = 'nav-btn gmaps-btn';
+            map.textContent = '📍 عرض الموقع';
+            actions.appendChild(map);
+          }
+          if (actions.children.length) card.appendChild(actions);
+
+          list.appendChild(card);
+        });
+      })
+      .catch(function () {
+        status.textContent = 'تعذر الاتصال بالخادم';
+      });
+  }
+
+  function exportPromoterReport() {
+    if (!promoterRows.length) return;
+    const keys = ['اسم نقطة البيع', 'رقم الهاتف', 'المنطقة', 'المندوب', 'آخر زيارة', 'لوكيشن', 'Latitude', 'Longitude'];
+    function esc(v) {
+      const s = (v === undefined || v === null) ? '' : String(v);
+      if (s.indexOf('"') !== -1 || s.indexOf(',') !== -1 || s.indexOf('\n') !== -1) {
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    }
+    let csv = keys.map(esc).join(',') + '\n';
+    promoterRows.forEach(function (r) {
+      csv += keys.map(function (k) { return esc(r[k]); }).join(',') + '\n';
+    });
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'متاجر_تحتاج_مروج_' + getTodayDateStr() + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // --- Supervisor: flag points as "needs promoter" for marketing manager ---
+  let flagPromoterSelected = {};
+
+  function buildFlagPromoterPanel() {
+    var content = document.getElementById('adminContent');
+    flagPromoterSelected = {};
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<h2 style="font-size:16px;margin-bottom:4px;">🧍 تحويل نقاط لمدير التسويق</h2>' +
+      '<p class="field-hint" style="margin-bottom:10px;">اختر المناطق ثم حدد النقاط التي تحتاج مروّج — ستظهر لمدير التسويق ليحدد خط سير المروّج.</p>' +
+      '<label>المناطق</label>' +
+      '<div id="areaPickerFlag"></div>' +
+      '<button type="button" class="submit-btn" onclick="loadFlagCandidates()">عرض النقاط</button>' +
+      '<div class="geo-status" id="flagStatus"></div>' +
+      '<div id="flagList"></div>' +
+      '<div id="flagCount" class="visit-counter" style="display:none;"></div>' +
+      '<button type="button" class="submit-btn" id="saveFlagBtn" style="display:none;" onclick="saveFlagForPromoter()">🧍 تحويل النقاط المختارة</button>' +
+      '<div class="msg success" id="flagMsg"></div>';
+
+    initAreaPicker('areaPickerFlag', 'اكتب اسم المنطقة للبحث...');
+  }
+
+  function loadFlagCandidates() {
+    var areas = getPickerAreas('areaPickerFlag');
+    var status = document.getElementById('flagStatus');
+    var list = document.getElementById('flagList');
+    list.innerHTML = '';
+    flagPromoterSelected = {};
+    updateFlagCount();
+
+    if (areas.length === 0) {
+      status.textContent = 'اختر منطقة واحدة على الأقل';
+      return;
+    }
+    status.textContent = 'جارٍ التحميل...';
+
+    fetch(WEB_APP_URL + '?action=points&areas=' + encodeURIComponent(areas.join(',')))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success' || !data.points || data.points.length === 0) {
+          status.textContent = 'لا توجد نقاط في المناطق المختارة';
+          return;
+        }
+        status.textContent = 'النقاط المتوفرة: ' + data.points.length;
+
+        var selAll = document.createElement('button');
+        selAll.type = 'button';
+        selAll.className = 'home-btn secondary';
+        selAll.style.marginTop = '10px';
+        selAll.textContent = '✔️ تحديد كل النقاط';
+        selAll.onclick = function () {
+          data.points.forEach(function (p) { flagPromoterSelected[p['اسم نقطة البيع']] = p; });
+          renderFlagList(data.points, list);
+          updateFlagCount();
+        };
+        list.appendChild(selAll);
+
+        renderFlagList(data.points, list);
+        updateFlagCount();
+      })
+      .catch(function () { status.textContent = 'تعذر الاتصال بالخادم'; });
+  }
+
+  function renderFlagList(points, list) {
+    Array.prototype.slice.call(list.querySelectorAll('.flag-point')).forEach(function (e) { e.remove(); });
+    points.forEach(function (p) {
+      var name = p['اسم نقطة البيع'];
+      var card = document.createElement('label');
+      card.className = 'checkbox-item flag-point';
+      card.style.display = 'flex';
+      card.style.alignItems = 'flex-start';
+      card.style.marginTop = '8px';
+
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!flagPromoterSelected[name];
+      cb.style.marginTop = '3px';
+      cb.addEventListener('change', function () {
+        if (cb.checked) flagPromoterSelected[name] = p;
+        else delete flagPromoterSelected[name];
+        updateFlagCount();
+      });
+
+      var info = document.createElement('span');
+      info.style.display = 'flex';
+      info.style.flexDirection = 'column';
+      info.style.gap = '2px';
+      var l1 = document.createElement('span');
+      l1.style.fontWeight = 'bold';
+      l1.textContent = name + (p['المنطقة'] ? ' · ' + p['المنطقة'] : '');
+      var meta = [];
+      if (p['حالة الزبون']) meta.push('🧾 ' + p['حالة الزبون']);
+      if (p['آخر زيارة']) meta.push('🕒 ' + p['آخر زيارة']);
+      info.appendChild(l1);
+      if (meta.length) {
+        var l2 = document.createElement('span');
+        l2.style.fontSize = '11px';
+        l2.style.color = 'var(--text-dim)';
+        l2.style.fontWeight = 'normal';
+        l2.textContent = meta.join(' · ');
+        info.appendChild(l2);
+      }
+      card.appendChild(cb);
+      card.appendChild(info);
+      list.appendChild(card);
+    });
+  }
+
+  function updateFlagCount() {
+    var count = Object.keys(flagPromoterSelected).length;
+    var el = document.getElementById('flagCount');
+    var btn = document.getElementById('saveFlagBtn');
+    if (count > 0) {
+      el.textContent = 'النقاط المختارة للتحويل: ' + count;
+      el.style.display = 'block';
+      btn.style.display = 'block';
+    } else { el.style.display = 'none'; btn.style.display = 'none'; }
+  }
+
+  function saveFlagForPromoter() {
+    var names = Object.keys(flagPromoterSelected);
+    var msg = document.getElementById('flagMsg');
+    msg.style.display = 'none';
+    if (names.length === 0) return;
+
+    var btn = document.getElementById('saveFlagBtn');
+    btn.disabled = true;
+    btn.textContent = 'جارٍ التحويل...';
+
+    var body = new FormData();
+    body.append('action', 'flagForPromoter');
+    body.append('points', JSON.stringify(names));
+
+    fetch(WEB_APP_URL, { method: 'POST', body: body })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        btn.disabled = false;
+        btn.textContent = '🧍 تحويل النقاط المختارة';
+        if (data.result === 'success') {
+          msg.className = 'msg success';
+          msg.textContent = 'تم تحويل ' + data.flagged + ' نقطة لمدير التسويق ✅';
+          msg.style.display = 'block';
+          showToast('تم التحويل لمدير التسويق', 'success');
+          flagPromoterSelected = {};
+          updateFlagCount();
+        } else {
+          msg.className = 'msg error';
+          msg.textContent = 'حدث خطأ أثناء التحويل';
+          msg.style.display = 'block';
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = '🧍 تحويل النقاط المختارة';
+        msg.className = 'msg error';
+        msg.textContent = 'تعذر الاتصال';
+        msg.style.display = 'block';
+      });
+  }
+
+  // --- Promoter route planning (marketing manager picks from "needs promoter" points) ---
+  const PROMOTER_NAMES = ['محمود'];
+  let promoterSelectedPoints = {};
+
+  function buildPromoterRoutePlanPanel() {
+    const content = document.getElementById('adminContent');
+    promoterSelectedPoints = {};
+    let promOpts = '<option value="" disabled selected>اختر المروّج</option>';
+    PROMOTER_NAMES.forEach(function (n) { promOpts += '<option value="' + n + '">' + n + '</option>'; });
+
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<h2 style="font-size:16px;margin-bottom:4px;">🧍 تحديد خط سير المروّج</h2>' +
+      '<p class="field-hint" style="margin-bottom:10px;">اختر المروّج والتاريخ، ثم حمّل النقاط التي تحتاج مروّج واختر منها.</p>' +
+      '<label>المروّج</label>' +
+      '<select id="promRouteProm">' + promOpts + '</select>' +
+      '<label>التاريخ</label>' +
+      '<input type="date" id="promRouteDate">' +
+      '<button type="button" class="submit-btn" onclick="loadPromoterCandidates()">عرض النقاط التي تحتاج مروّج</button>' +
+      '<div class="geo-status" id="promRouteStatus"></div>' +
+      '<div id="promRouteList"></div>' +
+      '<div id="promRouteCount" class="visit-counter" style="display:none;"></div>' +
+      '<button type="button" class="submit-btn" id="savePromRouteBtn" style="display:none;" onclick="savePromoterRoute()">💾 حفظ خط سير المروّج</button>' +
+      '<div class="msg success" id="promRouteMsg"></div>';
+    document.getElementById('promRouteDate').value = getTodayDateStr();
+  }
+
+  function loadPromoterCandidates() {
+    const status = document.getElementById('promRouteStatus');
+    const list = document.getElementById('promRouteList');
+    list.innerHTML = '';
+    status.textContent = 'جارٍ التحميل...';
+
+    fetch(WEB_APP_URL + '?action=promoterPoints')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success' || !data.points || data.points.length === 0) {
+          status.textContent = 'لا توجد نقاط مؤشّرة بالحاجة إلى مروّج حاليًا';
+          return;
+        }
+        status.textContent = 'عدد النقاط المتوفرة: ' + data.points.length + ' — اختر النقاط المطلوبة';
+
+        // Select all button
+        var selAllBtn = document.createElement('button');
+        selAllBtn.type = 'button';
+        selAllBtn.className = 'home-btn secondary';
+        selAllBtn.style.marginTop = '10px';
+        selAllBtn.textContent = '✔️ تحديد كل النقاط';
+        selAllBtn.onclick = function () {
+          data.points.forEach(function (p) { promoterSelectedPoints[p['اسم نقطة البيع']] = p; });
+          loadPromoterCandidates(); // re-render
+        };
+        list.appendChild(selAllBtn);
+
+        data.points.forEach(function (p) {
+          var name = p['اسم نقطة البيع'];
+          var card = document.createElement('label');
+          card.className = 'checkbox-item';
+          card.style.display = 'flex';
+          card.style.alignItems = 'flex-start';
+          card.style.marginTop = '8px';
+          var cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = !!promoterSelectedPoints[name];
+          cb.style.marginTop = '3px';
+          cb.addEventListener('change', function () {
+            if (cb.checked) promoterSelectedPoints[name] = p;
+            else delete promoterSelectedPoints[name];
+            updatePromRouteCount();
+          });
+          var info = document.createElement('span');
+          info.style.display = 'flex';
+          info.style.flexDirection = 'column';
+          info.style.gap = '2px';
+          var l1 = document.createElement('span');
+          l1.style.fontWeight = 'bold';
+          l1.textContent = name + (p['المنطقة'] ? ' · ' + p['المنطقة'] : '');
+          var l2 = document.createElement('span');
+          l2.style.fontSize = '11px';
+          l2.style.color = 'var(--text-dim)';
+          l2.style.fontWeight = 'normal';
+          l2.textContent = (p['رقم الهاتف'] ? '📞 ' + p['رقم الهاتف'] + ' · ' : '') +
+            (p['آخر زيارة'] ? '🕒 آخر زيارة: ' + p['آخر زيارة'] : '');
+          info.appendChild(l1);
+          info.appendChild(l2);
+          card.appendChild(cb);
+          card.appendChild(info);
+          list.appendChild(card);
+        });
+        updatePromRouteCount();
+      })
+      .catch(function () { status.textContent = 'تعذر الاتصال بالخادم'; });
+  }
+
+  function updatePromRouteCount() {
+    var count = Object.keys(promoterSelectedPoints).length;
+    var el = document.getElementById('promRouteCount');
+    var btn = document.getElementById('savePromRouteBtn');
+    if (count > 0) {
+      el.textContent = 'النقاط المختارة: ' + count;
+      el.style.display = 'block';
+      btn.style.display = 'block';
+    } else { el.style.display = 'none'; btn.style.display = 'none'; }
+  }
+
+  function savePromoterRoute() {
+    var prom = document.getElementById('promRouteProm').value;
+    var date = document.getElementById('promRouteDate').value;
+    var msg = document.getElementById('promRouteMsg');
+    msg.style.display = 'none';
+    var points = Object.keys(promoterSelectedPoints).map(function (k) { return promoterSelectedPoints[k]; });
+    if (!prom || !date || points.length === 0) {
+      msg.className = 'msg error'; msg.textContent = 'اختر المروّج والتاريخ ونقطة واحدة على الأقل'; msg.style.display = 'block'; return;
+    }
+    var body = new FormData();
+    body.append('action', 'savePromoterRoute');
+    body.append('date', date);
+    body.append('promoter', prom);
+    body.append('points', JSON.stringify(points));
+    fetch(WEB_APP_URL, { method: 'POST', body: body })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result === 'success') {
+          msg.className = 'msg success';
+          msg.textContent = 'تم حفظ خط سير المروّج (' + data.added + ' نقطة) ✅';
+          msg.style.display = 'block';
+          showToast('تم حفظ خط سير المروّج', 'success');
+          promoterSelectedPoints = {};
+        } else {
+          msg.className = 'msg error'; msg.textContent = 'حدث خطأ أثناء الحفظ'; msg.style.display = 'block';
+        }
+      })
+      .catch(function () { msg.className = 'msg error'; msg.textContent = 'تعذر الاتصال'; msg.style.display = 'block'; });
+  }
+
+  // --- Promoter route view (for the promoter user: sees their assigned points, marks visited) ---
+  function buildPromoterRouteView() {
+    var content = document.getElementById('adminContent');
+    content.innerHTML =
+      '<h2 style="font-size:16px;margin-bottom:4px;">🧍 خط سيري كمروّج</h2>' +
+      '<p class="field-hint" style="margin-bottom:10px;">اختر اليوم لعرض النقاط المحددة لك.</p>' +
+      '<label>التاريخ</label>' +
+      '<input type="date" id="myPromDate">' +
+      '<button type="button" class="submit-btn" onclick="loadMyPromoterRoute()">عرض خط سيري</button>' +
+      '<div class="geo-status" id="myPromStatus"></div>' +
+      '<div id="myPromList"></div>';
+    document.getElementById('myPromDate').value = getTodayDateStr();
+  }
+
+  function loadMyPromoterRoute() {
+    var promName = currentAdmin ? currentAdmin.displayName : '';
+    var date = document.getElementById('myPromDate').value || getTodayDateStr();
+    var status = document.getElementById('myPromStatus');
+    var list = document.getElementById('myPromList');
+    list.innerHTML = '';
+    status.textContent = 'جارٍ التحميل...';
+
+    fetch(WEB_APP_URL + '?action=getPromoterRoute&promoter=' + encodeURIComponent(promName) + '&date=' + encodeURIComponent(date))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success') { status.textContent = 'حدث خطأ أثناء التحميل'; return; }
+        if (!data.rows || data.rows.length === 0) {
+          status.textContent = 'لا توجد نقاط محددة لك في هذا اليوم';
+          return;
+        }
+        var total = data.rows.length;
+        var done = data.rows.filter(function (r) { return String(r['تمت الزيارة'] || '').trim() === 'نعم'; }).length;
+        status.textContent = 'عدد النقاط: ' + total + ' · تمت الزيارة: ' + done + ' من ' + total;
+
+        data.rows.forEach(function (row) {
+          var pointName = row['اسم نقطة البيع'] || '';
+          var visited = String(row['تمت الزيارة'] || '').trim() === 'نعم';
+          var lat = row['Latitude'];
+          var lng = row['Longitude'];
+          var card = document.createElement('div');
+          card.className = 'route-card' + (visited ? ' visited-card' : '');
+
+          var title = document.createElement('div');
+          title.className = 'route-card-title';
+          title.textContent = (visited ? '✅ ' : '') + pointName;
+          card.appendChild(title);
+
+          var area = document.createElement('div');
+          area.className = 'route-card-detail';
+          area.textContent = '📍 ' + (row['المنطقة'] || '');
+          card.appendChild(area);
+
+          var phoneNum = String(row['رقم الهاتف'] || '').replace(/[^0-9]/g, '');
+          if (phoneNum.length === 10 && phoneNum.charAt(0) === '7') phoneNum = '0' + phoneNum;
+          if (phoneNum) {
+            var ph = document.createElement('div');
+            ph.className = 'route-card-detail';
+            ph.textContent = '📞 ' + phoneNum;
+            card.appendChild(ph);
+          }
+
+          // Action buttons
+          var actions = document.createElement('div');
+          actions.className = 'route-card-actions';
+          if (phoneNum) {
+            var call = document.createElement('a');
+            call.href = 'tel:' + phoneNum;
+            call.className = 'nav-btn call-btn';
+            call.textContent = '📞 اتصال';
+            actions.appendChild(call);
+          }
+          if (lat && lng) {
+            var gLink = document.createElement('a');
+            gLink.href = 'https://maps.google.com/?q=' + lat + ',' + lng;
+            gLink.target = '_blank'; gLink.rel = 'noopener';
+            gLink.className = 'nav-btn gmaps-btn';
+            gLink.textContent = '📍 خريطة';
+            actions.appendChild(gLink);
+            var wLink = document.createElement('a');
+            wLink.href = 'https://waze.com/ul?ll=' + lat + ',' + lng + '&navigate=yes';
+            wLink.target = '_blank'; wLink.rel = 'noopener';
+            wLink.className = 'nav-btn waze-btn';
+            wLink.textContent = '🧭 Waze';
+            actions.appendChild(wLink);
+          }
+          if (actions.children.length) card.appendChild(actions);
+
+          // Visit button
+          if (!visited) {
+            var visitBtn = document.createElement('button');
+            visitBtn.type = 'button';
+            visitBtn.className = 'submit-btn';
+            visitBtn.style.marginTop = '10px';
+            visitBtn.textContent = '✅ تسجيل تمت الزيارة';
+            visitBtn.onclick = function () {
+              visitBtn.disabled = true;
+              visitBtn.textContent = 'جارٍ التسجيل...';
+              var body = new FormData();
+              body.append('action', 'markPromoterVisit');
+              body.append('date', date);
+              body.append('promoter', promName);
+              body.append('pointName', pointName);
+              fetch(WEB_APP_URL, { method: 'POST', body: body })
+                .then(function (res) { return res.json(); })
+                .then(function (d) {
+                  if (d.result === 'success') {
+                    showToast('تم تسجيل زيارة ' + pointName, 'success');
+                    loadMyPromoterRoute();
+                  } else {
+                    visitBtn.disabled = false; visitBtn.textContent = '✅ تسجيل تمت الزيارة';
+                  }
+                })
+                .catch(function () { visitBtn.disabled = false; visitBtn.textContent = '✅ تسجيل تمت الزيارة'; });
+            };
+            card.appendChild(visitBtn);
+          }
+
+          list.appendChild(card);
+        });
+      })
+      .catch(function () { status.textContent = 'تعذر الاتصال بالخادم'; });
+  }
+
   function buildAdminMenu() {
     const content = document.getElementById('adminContent');
     let html = '';
@@ -1238,10 +1808,17 @@
     // Reporting tools: available to every admin account (including the owner)
     html += '<button type="button" class="home-btn secondary" onclick="buildReportsPanel()">📊 عرض تقارير الزيارات الميدانية</button>' +
       '<button type="button" class="home-btn admin" onclick="buildProgressPanel()">📈 متابعة تقدّم المندوبين اليومي</button>' +
-      '<button type="button" class="home-btn" onclick="buildPeriodPanel()">📅 تقرير فترة زمنية</button>';
+      '<button type="button" class="home-btn" onclick="buildPeriodPanel()">📅 تقرير فترة زمنية</button>' +
+      '<button type="button" class="home-btn secondary" onclick="buildPromoterPanel()">🧍 متاجر تحتاج مروّج</button>';
 
     if (canPlan()) {
       html += '<button type="button" class="home-btn secondary" onclick="buildNeglectedPanel()">⚠️ النقاط المهملة (تحتاج زيارة)</button>';
+      html += '<button type="button" class="home-btn" onclick="buildFlagPromoterPanel()">🧍 تحويل نقاط لمدير التسويق (تحتاج مروّج)</button>';
+    }
+
+    // Promoter route planning: marketing manager only
+    if (isMarketingManager() || isManagement()) {
+      html += '<button type="button" class="home-btn" onclick="buildPromoterRoutePlanPanel()">🧍 تحديد خط سير المروّج</button>';
     }
 
     // Shared-list editing: management only
@@ -3031,6 +3608,8 @@
       .map(function (cb) { return cb.value; })
       .join('، ');
 
+    const needsPromoter = '';
+
     const formData = new FormData();
     formData.append('اسم نقطة البيع', document.getElementById('store').value);
     formData.append('رقم الهاتف', document.getElementById('phone').value);
@@ -3039,6 +3618,7 @@
     formData.append('حالة الزبون', statusSelect.value);
     formData.append('سبب الرفض', reasonSelect.value);
     formData.append('الشركات المنافسة', competitors);
+    formData.append('يحتاج مروج', '');
     formData.append('ملاحظات', document.getElementById('notes').value);
     formData.append('Latitude', document.getElementById('lat').value);
     formData.append('Longitude', document.getElementById('lng').value);
@@ -3052,6 +3632,7 @@
       customerStatus: statusSelect.value,
       reason: reasonSelect.value,
       competitors: competitors,
+      needsPromoter: needsPromoter,
       notes: document.getElementById('notes').value
     };
 
@@ -3116,6 +3697,7 @@
     body.append('customerStatus', details.customerStatus || '');
     body.append('reason', details.reason || '');
     body.append('competitors', details.competitors || '');
+    body.append('needsPromoter', details.needsPromoter || '');
     body.append('notes', details.notes || '');
     body.append('Latitude', activeVisit.lat);
     body.append('Longitude', activeVisit.lng);
