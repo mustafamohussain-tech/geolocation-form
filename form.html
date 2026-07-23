@@ -494,6 +494,34 @@
   .chips-dd-item:last-child { border-bottom: none; }
   .chips-dd-item:hover { background: var(--card-hi); }
   .chips-dd-empty { padding: 12px 14px; font-size: 13px; color: var(--text-mute); }
+
+  /* Report tabs + KPI blocks + status pills */
+  .rep-tabs { display: flex; gap: 7px; margin-top: 4px; }
+  .rep-tab {
+    flex: 1; text-align: center; font-size: 12.5px; font-weight: 600; font-family: inherit;
+    padding: 12px 5px; border-radius: 11px; background: var(--bg-1);
+    border: 1px solid var(--line); color: var(--text-dim); cursor: pointer; transition: 0.18s;
+  }
+  .rep-tab.on {
+    background: linear-gradient(120deg, var(--accent), var(--accent-dark));
+    color: #fff; border-color: transparent; box-shadow: 0 8px 18px -8px var(--accent-glow);
+  }
+  .rep-tab:active { transform: scale(0.96); }
+  .kpis { display: flex; gap: 8px; margin: 10px 0 6px; }
+  .kpi {
+    flex: 1; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 11px 6px; text-align: center;
+  }
+  .kpi-n { font-size: 20px; font-weight: 700; color: var(--accent); }
+  .kpi-l { font-size: 10.5px; color: var(--text-dim); margin-top: 1px; }
+  .pill {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    padding: 3px 9px; border-radius: 20px; margin: 3px 3px 0 0;
+  }
+  .p-green { background: rgba(31,157,84,0.13); color: var(--green); }
+  .p-amber { background: rgba(200,121,27,0.13); color: var(--amber); }
+  .p-red { background: rgba(214,61,51,0.13); color: var(--danger); }
+  .warn-line { color: var(--danger); font-weight: 600; font-size: 12.5px; margin-top: 5px; }
 </style>
 </head>
 <body>
@@ -638,7 +666,7 @@
       </div>
 
       <label>الشركات المنافسة</label>
-      <div class="checkbox-group">
+      <div class="checkbox-group" id="competitorsBox">
         <label class="checkbox-item"><input type="checkbox" class="competitor" value="توري"> توري</label>
         <label class="checkbox-item"><input type="checkbox" class="competitor" value="بارع"> بارع</label>
         <label class="checkbox-item"><input type="checkbox" class="competitor" value="لميس"> لميس</label>
@@ -855,7 +883,7 @@
         loginBtn.disabled = false;
         loginBtn.textContent = 'تسجيل الدخول';
         if (data.result === 'success') {
-          currentAdmin = { username: data.username, role: data.role, displayName: data.displayName };
+          currentAdmin = { username: data.username, role: data.role, displayName: data.displayName, pass: pass };
           document.getElementById('loginUser').value = '';
           document.getElementById('loginPass').value = '';
           openAdminPanel();
@@ -998,27 +1026,264 @@
     return Object.keys(areaPickers[boxId].selected);
   }
 
+  // --- Competitor list: loaded from the sheet, editable from the admin panel ---
+  let competitorList = null;
+
+  function loadCompetitors(cb) {
+    fetch(WEB_APP_URL + '?action=getCompetitors')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result === 'success' && data.competitors) {
+          competitorList = data.competitors;
+          renderCompetitorCheckboxes();
+        }
+        if (cb) cb(competitorList);
+      })
+      .catch(function () { if (cb) cb(null); });
+  }
+
+  function renderCompetitorCheckboxes() {
+    const box = document.getElementById('competitorsBox');
+    if (!box || !competitorList) return;
+    // Keep whatever was already checked
+    const checked = {};
+    Array.prototype.slice.call(box.querySelectorAll('.competitor:checked'))
+      .forEach(function (cb) { checked[cb.value] = true; });
+
+    box.innerHTML = '';
+    competitorList.forEach(function (name) {
+      const lbl = document.createElement('label');
+      lbl.className = 'checkbox-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'competitor';
+      cb.value = name;
+      if (checked[name]) cb.checked = true;
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(' ' + name));
+      box.appendChild(lbl);
+    });
+  }
+
+  // --- Admin panel: manage the competitor list ---
+  let editingCompetitors = [];
+
+  // Only the management account may edit shared lists
+  function isManagement() {
+    if (!currentAdmin) return false;
+    const role = String(currentAdmin.role || '').trim();
+    return role === 'الادارة' || role === 'الإدارة';
+  }
+
+  // Owner: view-only access to reports and progress (no planning, no editing)
+  function isOwner() {
+    if (!currentAdmin) return false;
+    return String(currentAdmin.role || '').trim() === 'المالك';
+  }
+
+  // Route planning and neglected-points scheduling: supervisor + management
+  function canPlan() {
+    return !!currentAdmin && !isOwner();
+  }
+
+  function buildCompetitorsPanel() {
+    const content = document.getElementById('adminContent');
+    if (!isManagement()) {
+      notAllowedPanel('هذه الصفحة متاحة لحساب الإدارة فقط');
+      return;
+    }
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<h2 style="font-size:16px;margin-bottom:4px;">🏢 إدارة الشركات المنافسة</h2>' +
+      '<p class="field-hint" style="margin-bottom:10px;">أضف أو احذف الشركات التي تظهر في فورمة الزيارة، ثم اضغط حفظ.</p>' +
+      '<label for="newComp">إضافة شركة جديدة</label>' +
+      '<div style="display:flex;gap:8px;align-items:center;">' +
+      '<input type="text" id="newComp" placeholder="اسم الشركة" autocomplete="off" style="flex:1;">' +
+      '<button type="button" class="home-btn" style="width:auto;margin:0;padding:14px 18px;" onclick="addCompetitor()">➕</button>' +
+      '</div>' +
+      '<div class="geo-status" id="compStatus">جارٍ التحميل...</div>' +
+      '<div id="compList"></div>' +
+      '<button type="button" class="submit-btn" onclick="saveCompetitors()">💾 حفظ القائمة</button>' +
+      '<div class="msg success" id="compMsg"></div>';
+
+    document.getElementById('newComp').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); addCompetitor(); }
+    });
+
+    loadCompetitors(function (list) {
+      editingCompetitors = (list || []).slice();
+      document.getElementById('compStatus').textContent =
+        'عدد الشركات الحالية: ' + editingCompetitors.length;
+      renderCompetitorEditor();
+    });
+  }
+
+  function renderCompetitorEditor() {
+    const list = document.getElementById('compList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (editingCompetitors.length === 0) {
+      list.innerHTML = '<div class="field-hint">القائمة فارغة — أضف شركة واحدة على الأقل.</div>';
+      return;
+    }
+    editingCompetitors.forEach(function (name, idx) {
+      const row = document.createElement('div');
+      row.className = 'checkbox-item';
+      row.style.display = 'flex';
+      row.style.justifyContent = 'space-between';
+      row.style.alignItems = 'center';
+      row.style.marginTop = '8px';
+
+      const txt = document.createElement('span');
+      txt.textContent = '🏢 ' + name;
+      txt.style.fontWeight = '600';
+
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '🗑️ حذف';
+      del.style.background = 'rgba(214,61,51,0.12)';
+      del.style.color = 'var(--danger)';
+      del.style.border = 'none';
+      del.style.borderRadius = '9px';
+      del.style.padding = '8px 12px';
+      del.style.fontSize = '12.5px';
+      del.style.fontWeight = '600';
+      del.style.fontFamily = 'inherit';
+      del.style.cursor = 'pointer';
+      del.onclick = function () {
+        editingCompetitors.splice(idx, 1);
+        document.getElementById('compStatus').textContent =
+          'عدد الشركات الحالية: ' + editingCompetitors.length;
+        renderCompetitorEditor();
+      };
+
+      row.appendChild(txt);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+
+  function addCompetitor() {
+    const input = document.getElementById('newComp');
+    const name = input.value.trim();
+    const msg = document.getElementById('compMsg');
+    msg.style.display = 'none';
+    if (!name) return;
+    if (editingCompetitors.indexOf(name) !== -1) {
+      msg.className = 'msg error';
+      msg.textContent = 'هذه الشركة موجودة بالفعل';
+      msg.style.display = 'block';
+      return;
+    }
+    editingCompetitors.push(name);
+    input.value = '';
+    document.getElementById('compStatus').textContent =
+      'عدد الشركات الحالية: ' + editingCompetitors.length;
+    renderCompetitorEditor();
+  }
+
+  function saveCompetitors() {
+    const msg = document.getElementById('compMsg');
+    msg.style.display = 'none';
+    if (editingCompetitors.length === 0) {
+      msg.className = 'msg error';
+      msg.textContent = 'أضف شركة واحدة على الأقل قبل الحفظ';
+      msg.style.display = 'block';
+      return;
+    }
+
+    const body = new FormData();
+    body.append('action', 'saveCompetitors');
+    body.append('list', editingCompetitors.join(','));
+    body.append('username', (currentAdmin && currentAdmin.username) || '');
+    body.append('password', (currentAdmin && currentAdmin.pass) || '');
+
+    fetch(WEB_APP_URL, { method: 'POST', body: body })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result === 'success') {
+          competitorList = editingCompetitors.slice();
+          renderCompetitorCheckboxes();
+          msg.className = 'msg success';
+          msg.textContent = 'تم حفظ القائمة (' + data.count + ' شركة) ✅';
+          msg.style.display = 'block';
+          showToast('تم حفظ الشركات المنافسة', 'success');
+        } else if (data.error === 'not_authorized') {
+          msg.className = 'msg error';
+          msg.textContent = '🔒 غير مصرّح — التعديل متاح لحساب الإدارة فقط';
+          msg.style.display = 'block';
+          showToast('غير مصرّح بالتعديل', 'error');
+        } else {
+          msg.className = 'msg error';
+          msg.textContent = 'حدث خطأ أثناء الحفظ';
+          msg.style.display = 'block';
+        }
+      })
+      .catch(function () {
+        msg.className = 'msg error';
+        msg.textContent = 'تعذر الاتصال بالخادم';
+        msg.style.display = 'block';
+      });
+  }
+
   function buildAdminMenu() {
     const content = document.getElementById('adminContent');
-    content.innerHTML =
-      '<button type="button" class="home-btn" onclick="buildSupervisorPanel()">🗺️ تحديد وترتيب خطوط السير</button>' +
-      '<button type="button" class="home-btn secondary" onclick="buildReportsPanel()">📊 عرض تقارير الزيارات الميدانية</button>' +
+    let html = '';
+
+    // Planning tools: supervisor + management only
+    if (canPlan()) {
+      html += '<button type="button" class="home-btn" onclick="buildSupervisorPanel()">🗺️ تحديد وترتيب خطوط السير</button>';
+    }
+
+    // Reporting tools: available to every admin account (including the owner)
+    html += '<button type="button" class="home-btn secondary" onclick="buildReportsPanel()">📊 عرض تقارير الزيارات الميدانية</button>' +
       '<button type="button" class="home-btn admin" onclick="buildProgressPanel()">📈 متابعة تقدّم المندوبين اليومي</button>' +
-      '<button type="button" class="home-btn" onclick="buildPeriodPanel()">📅 تقرير فترة زمنية</button>' +
-      '<button type="button" class="home-btn secondary" onclick="buildNeglectedPanel()">⚠️ النقاط المهملة (تحتاج زيارة)</button>';
+      '<button type="button" class="home-btn" onclick="buildPeriodPanel()">📅 تقرير فترة زمنية</button>';
+
+    if (canPlan()) {
+      html += '<button type="button" class="home-btn secondary" onclick="buildNeglectedPanel()">⚠️ النقاط المهملة (تحتاج زيارة)</button>';
+    }
+
+    // Shared-list editing: management only
+    if (isManagement()) {
+      html += '<button type="button" class="home-btn admin" onclick="buildCompetitorsPanel()">🏢 إدارة الشركات المنافسة</button>';
+    }
+
+    content.innerHTML = html;
+  }
+
+  // Shown when an account opens a page it is not allowed to use
+  function notAllowedPanel(title) {
+    const content = document.getElementById('adminContent');
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<div class="msg error" style="display:block;">🔒 ' + title + '</div>';
   }
 
   // --- Period summary report: pick a from/to range ---
+  // --- Period report: team / per-rep / per-area, one fetch, three views ---
+  let periodData = null;
+  let periodTab = 'team';
+
   function buildPeriodPanel() {
     const content = document.getElementById('adminContent');
+    periodData = null;
+    periodTab = 'team';
     content.innerHTML =
       '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
       '<label for="perFrom">من تاريخ</label>' +
       '<input type="date" id="perFrom">' +
       '<label for="perTo">إلى تاريخ</label>' +
       '<input type="date" id="perTo">' +
+      '<label>نوع التقرير</label>' +
+      '<div class="rep-tabs">' +
+      '<button type="button" class="rep-tab on" id="tabTeam" onclick="switchPeriodTab(\'team\')">👥 الفريق</button>' +
+      '<button type="button" class="rep-tab" id="tabReps" onclick="switchPeriodTab(\'reps\')">🧑‍💼 كل مندوب</button>' +
+      '<button type="button" class="rep-tab" id="tabAreas" onclick="switchPeriodTab(\'areas\')">📍 كل منطقة</button>' +
+      '</div>' +
       '<button type="button" class="submit-btn" onclick="loadPeriodSummary()">عرض التقرير</button>' +
       '<div class="geo-status" id="perStatus"></div>' +
+      '<button type="button" class="submit-btn" id="perExportBtn" style="display:none;" onclick="exportPeriodReport()">📥 تصدير هذا التقرير إلى Excel</button>' +
       '<div id="perResult"></div>';
 
     // Default: last 7 days
@@ -1032,12 +1297,23 @@
     document.getElementById('perFrom').value = fmt(weekAgo);
   }
 
+  function switchPeriodTab(tab) {
+    periodTab = tab;
+    const map = { team: 'tabTeam', reps: 'tabReps', areas: 'tabAreas' };
+    ['tabTeam', 'tabReps', 'tabAreas'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.classList.toggle('on', map[tab] === id);
+    });
+    if (periodData) renderPeriodReport();
+  }
+
   function loadPeriodSummary() {
     const from = document.getElementById('perFrom').value;
     const to = document.getElementById('perTo').value;
     const status = document.getElementById('perStatus');
     const result = document.getElementById('perResult');
     result.innerHTML = '';
+    document.getElementById('perExportBtn').style.display = 'none';
 
     if (!from || !to) {
       status.textContent = 'الرجاء تحديد تاريخ البداية والنهاية';
@@ -1056,58 +1332,201 @@
           status.textContent = 'حدث خطأ أثناء التحميل';
           return;
         }
-        status.textContent = '';
-
-        const summary = document.createElement('div');
-        summary.className = 'route-card';
-        summary.innerHTML =
-          '<div class="route-card-title">📅 ملخص الفترة ' + data.from + ' ← ' + data.to + '</div>' +
-          '<div class="route-card-detail">🗺️ إجمالي الزيارات الميدانية: <b>' + data.totalVisits + '</b></div>' +
-          '<div class="route-card-detail">⏱️ إجمالي وقت الزيارات: <b>' + data.totalMinutes + '</b> دقيقة</div>' +
-          '<div class="route-card-detail">➕ نقاط جديدة مرفوعة: <b>' + data.newPoints + '</b></div>' +
-          (data.bestRep && data.bestRep.name
-            ? '<div class="route-card-detail">🏆 أفضل مندوب: <b>' + data.bestRep.name + '</b> (' + data.bestRep.count + ' زيارة)</div>'
-            : '') +
-          (data.topArea && data.topArea.name
-            ? '<div class="route-card-detail">📍 أنشط منطقة: <b>' + data.topArea.name + '</b> (' + data.topArea.count + ' زيارة)</div>'
-            : '');
-        result.appendChild(summary);
-
-        // Per-rep breakdown
-        const reps = Object.keys(data.repCounts || {});
-        if (reps.length) {
-          const repCard = document.createElement('div');
-          repCard.className = 'route-card';
-          let html = '<div class="route-card-title">👥 الزيارات حسب المندوب</div>';
-          reps.sort(function (a, b) { return data.repCounts[b] - data.repCounts[a]; })
-            .forEach(function (r) {
-              html += '<div class="route-card-detail">' + r + ': <b>' + data.repCounts[r] + '</b> زيارة</div>';
-            });
-          repCard.innerHTML = html;
-          result.appendChild(repCard);
-        }
-
-        // Per-area breakdown
-        const areas = Object.keys(data.areaCounts || {});
-        if (areas.length) {
-          const areaCard = document.createElement('div');
-          areaCard.className = 'route-card';
-          let html = '<div class="route-card-title">🗂️ الزيارات حسب المنطقة</div>';
-          areas.sort(function (a, b) { return data.areaCounts[b] - data.areaCounts[a]; })
-            .forEach(function (a) {
-              html += '<div class="route-card-detail">' + a + ': <b>' + data.areaCounts[a] + '</b> زيارة</div>';
-            });
-          areaCard.innerHTML = html;
-          result.appendChild(areaCard);
-        }
-
+        periodData = data;
         if (data.totalVisits === 0 && data.newPoints === 0) {
           status.textContent = 'لا يوجد نشاط مسجّل في هذه الفترة';
+          return;
         }
+        status.textContent = '';
+        document.getElementById('perExportBtn').style.display = 'block';
+        renderPeriodReport();
       })
       .catch(function () {
         status.textContent = 'تعذر الاتصال بالخادم';
       });
+  }
+
+  // Small helpers for building report cards
+  function kpiRow(items) {
+    let h = '<div class="kpis">';
+    items.forEach(function (it) {
+      h += '<div class="kpi"><div class="kpi-n">' + it.n + '</div><div class="kpi-l">' + it.l + '</div></div>';
+    });
+    return h + '</div>';
+  }
+  function statusPills(list) {
+    if (!list || !list.length) return '';
+    let h = '<div class="route-card-detail">🧾 الحالات: ';
+    list.forEach(function (s) {
+      let cls = 'p-amber';
+      if (s.name === 'تم البيع') cls = 'p-green';
+      else if (s.name === 'لا يريد التعامل معنا') cls = 'p-red';
+      h += '<span class="pill ' + cls + '">' + s.name + ' ' + s.count + '</span> ';
+    });
+    return h + '</div>';
+  }
+  function pairsLine(icon, label, list, unit) {
+    if (!list || !list.length) return '';
+    const txt = list.map(function (x) { return x.name + ' (' + x.count + ')'; }).join(' · ');
+    return '<div class="route-card-detail">' + icon + ' ' + label + ': ' + txt + '</div>';
+  }
+
+  function renderPeriodReport() {
+    const d = periodData;
+    const result = document.getElementById('perResult');
+    if (!d) return;
+    result.innerHTML = '';
+
+    // ---------- TEAM ----------
+    if (periodTab === 'team') {
+      const card = document.createElement('div');
+      card.className = 'route-card';
+      card.innerHTML =
+        '<div class="route-card-title">👥 ملخص الفريق · ' + d.from + ' ← ' + d.to + '</div>' +
+        kpiRow([
+          { n: d.totalVisits, l: 'زيارة' },
+          { n: d.totalMinutes, l: 'دقيقة' },
+          { n: d.newPoints, l: 'نقطة جديدة' }
+        ]) +
+        '<div class="route-card-detail">⏱️ متوسط الزيارة: <b>' + d.avgMinutes + '</b> دقيقة</div>' +
+        (d.bestRep && d.bestRep.name
+          ? '<div class="route-card-detail">🏆 أفضل مندوب: <b>' + d.bestRep.name + '</b> (' + d.bestRep.count + ' زيارة)</div>' : '') +
+        (d.topArea && d.topArea.name
+          ? '<div class="route-card-detail">📍 أنشط منطقة: <b>' + d.topArea.name + '</b> (' + d.topArea.count + ' زيارة)</div>' : '') +
+        (d.shortVisits > 0 ? '<div class="warn-line">⚠️ زيارات قصيرة مشبوهة: ' + d.shortVisits + '</div>' : '');
+      result.appendChild(card);
+
+      // Ranking lists
+      if (d.repList && d.repList.length) {
+        const c = document.createElement('div');
+        c.className = 'route-card';
+        let h = '<div class="route-card-title">🧑‍💼 ترتيب المندوبين</div>';
+        d.repList.forEach(function (r, i) {
+          h += '<div class="route-card-detail">' + (i + 1) + '. ' + r.rep + ': <b>' + r.visits + '</b> زيارة · ' + r.newPoints + ' نقطة جديدة</div>';
+        });
+        c.innerHTML = h;
+        result.appendChild(c);
+      }
+      if (d.areaList && d.areaList.length) {
+        const c = document.createElement('div');
+        c.className = 'route-card';
+        let h = '<div class="route-card-title">🗂️ ترتيب المناطق</div>';
+        d.areaList.forEach(function (a, i) {
+          h += '<div class="route-card-detail">' + (i + 1) + '. ' + a.area + ': <b>' + a.visits + '</b> زيارة · تغطية ' + a.coverage + '%</div>';
+        });
+        c.innerHTML = h;
+        result.appendChild(c);
+      }
+      return;
+    }
+
+    // ---------- PER REP ----------
+    if (periodTab === 'reps') {
+      if (!d.repList || !d.repList.length) {
+        result.innerHTML = '<div class="route-card"><div class="route-card-detail">لا توجد زيارات مسجّلة لأي مندوب في هذه الفترة</div></div>';
+        return;
+      }
+      d.repList.forEach(function (r) {
+        const c = document.createElement('div');
+        c.className = 'route-card';
+        c.innerHTML =
+          '<div class="route-card-title">🧑‍💼 ' + r.rep + '</div>' +
+          kpiRow([
+            { n: r.visits, l: 'زيارة' },
+            { n: r.avgMinutes, l: 'متوسط دقيقة' },
+            { n: r.newPoints, l: 'نقطة جديدة' }
+          ]) +
+          '<div class="route-card-detail">📆 أيام عمل فعلية: <b>' + r.workDays + '</b> · متوسط <b>' + r.avgPerDay + '</b> زيارة/يوم</div>' +
+          '<div class="route-card-detail">⏱️ إجمالي الوقت: <b>' + r.minutes + '</b> دقيقة</div>' +
+          pairsLine('🗂️', 'مناطقه', r.areas) +
+          statusPills(r.statuses) +
+          (r.shortVisits > 0 ? '<div class="warn-line">⚠️ زيارات قصيرة: ' + r.shortVisits + '</div>' : '');
+        result.appendChild(c);
+      });
+      return;
+    }
+
+    // ---------- PER AREA ----------
+    if (!d.areaList || !d.areaList.length) {
+      result.innerHTML = '<div class="route-card"><div class="route-card-detail">لا توجد زيارات مسجّلة في أي منطقة في هذه الفترة</div></div>';
+      return;
+    }
+    d.areaList.forEach(function (a) {
+      const c = document.createElement('div');
+      c.className = 'route-card';
+      c.innerHTML =
+        '<div class="route-card-title">📍 ' + a.area + '</div>' +
+        kpiRow([
+          { n: a.visits, l: 'زيارة' },
+          { n: a.uniquePoints, l: 'نقطة فريدة' },
+          { n: a.coverage + '%', l: 'تغطية' }
+        ]) +
+        pairsLine('🧑‍💼', 'المندوبون', a.reps) +
+        '<div class="rp-bar" style="margin-top:9px;"><div class="rp-fill" style="width:' + a.coverage + '%"></div></div>' +
+        '<div class="route-card-detail" style="margin-top:8px;">زارت <b>' + a.uniquePoints + '</b> من أصل <b>' + a.totalPoints + '</b> نقطة في المنطقة</div>' +
+        statusPills(a.statuses);
+      result.appendChild(c);
+    });
+  }
+
+  // Export the currently shown period report as CSV
+  function exportPeriodReport() {
+    const d = periodData;
+    if (!d) return;
+    let rows = [];
+    let fileTag = '';
+
+    if (periodTab === 'team') {
+      fileTag = 'الفريق';
+      rows.push(['المؤشر', 'القيمة']);
+      rows.push(['من تاريخ', d.from]);
+      rows.push(['إلى تاريخ', d.to]);
+      rows.push(['إجمالي الزيارات', d.totalVisits]);
+      rows.push(['إجمالي الدقائق', d.totalMinutes]);
+      rows.push(['متوسط الزيارة (دقيقة)', d.avgMinutes]);
+      rows.push(['نقاط جديدة', d.newPoints]);
+      rows.push(['زيارات قصيرة', d.shortVisits]);
+      rows.push(['أفضل مندوب', (d.bestRep && d.bestRep.name) || '']);
+      rows.push(['أنشط منطقة', (d.topArea && d.topArea.name) || '']);
+    } else if (periodTab === 'reps') {
+      fileTag = 'المندوبين';
+      rows.push(['المندوب', 'الزيارات', 'إجمالي الدقائق', 'متوسط الدقائق', 'نقاط جديدة', 'أيام عمل', 'زيارات/يوم', 'زيارات قصيرة', 'المناطق', 'الحالات']);
+      d.repList.forEach(function (r) {
+        rows.push([
+          r.rep, r.visits, r.minutes, r.avgMinutes, r.newPoints, r.workDays, r.avgPerDay, r.shortVisits,
+          r.areas.map(function (x) { return x.name + '(' + x.count + ')'; }).join(' | '),
+          r.statuses.map(function (x) { return x.name + '(' + x.count + ')'; }).join(' | ')
+        ]);
+      });
+    } else {
+      fileTag = 'المناطق';
+      rows.push(['المنطقة', 'الزيارات', 'نقاط فريدة', 'إجمالي نقاط المنطقة', 'نسبة التغطية %', 'المندوبون', 'الحالات']);
+      d.areaList.forEach(function (a) {
+        rows.push([
+          a.area, a.visits, a.uniquePoints, a.totalPoints, a.coverage,
+          a.reps.map(function (x) { return x.name + '(' + x.count + ')'; }).join(' | '),
+          a.statuses.map(function (x) { return x.name + '(' + x.count + ')'; }).join(' | ')
+        ]);
+      });
+    }
+
+    function esc(v) {
+      const s = (v === undefined || v === null) ? '' : String(v);
+      if (s.indexOf('"') !== -1 || s.indexOf(',') !== -1 || s.indexOf('\n') !== -1) {
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    }
+    const csv = rows.map(function (r) { return r.map(esc).join(','); }).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'تقرير_' + fileTag + '_' + d.from + '_' + d.to + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   // --- Neglected points: not visited for N+ days, addable to a route ---
@@ -1115,6 +1534,10 @@
 
   function buildNeglectedPanel() {
     const content = document.getElementById('adminContent');
+    if (!canPlan()) {
+      notAllowedPanel('هذه الصفحة متاحة لمشرف المبيعات والإدارة فقط');
+      return;
+    }
     neglectedSelected = {};
 
     let repOptions = '<option value="" disabled selected>اختر المندوب</option>';
@@ -1344,6 +1767,10 @@
 
   function buildSupervisorPanel() {
     const content = document.getElementById('adminContent');
+    if (!canPlan()) {
+      notAllowedPanel('تحديد خطوط السير متاح لمشرف المبيعات والإدارة فقط');
+      return;
+    }
     selectedPoints = {};
 
     let repOptions = '<option value="" disabled selected>اختر المندوب</option>';
@@ -1359,6 +1786,13 @@
       '<select id="adminRep">' + repOptions + '</select>' +
       '<label>المناطق (اكتب للبحث واختر منطقة أو أكثر)</label>' +
       '<div id="areaPickerRoute"></div>' +
+      '<label style="margin-top:16px;">حالة الزبون (أشّر الحالات التي تريد إضافتها لخط السير)</label>' +
+      '<div class="checkbox-group" id="statusFilterBox">' +
+      '<label class="checkbox-item"><input type="checkbox" class="status-f" value="تم البيع" checked> تم البيع</label>' +
+      '<label class="checkbox-item"><input type="checkbox" class="status-f" value="لديه مخزون" checked> لديه مخزون</label>' +
+      '<label class="checkbox-item"><input type="checkbox" class="status-f" value="لا يريد التعامل معنا"> لا يريد التعامل معنا</label>' +
+      '<label class="checkbox-item"><input type="checkbox" class="status-f" value="__none__" checked> بدون حالة مسجّلة</label>' +
+      '</div>' +
       '<button type="button" class="submit-btn" onclick="loadAreaPoints()">عرض نقاط المناطق المختارة</button>' +
       '<div class="field-hint" style="margin-top:8px;">اختر منطقة أو أكثر من الشريط أعلاه — كل النقاط التي تحددها تُجمع في خط سير واحد.</div>' +
       '<div class="geo-status" id="adminStatus"></div>' +
@@ -1403,25 +1837,44 @@
           status.textContent = 'لا توجد نقاط مسجلة في المناطق المختارة';
           return;
         }
-        status.textContent = 'المناطق: ' + areas.join('، ') + ' — عدد النقاط: ' + data.points.length;
+        // --- Filter by the selected customer statuses ---
+        const wanted = Array.from(document.querySelectorAll('.status-f:checked'))
+          .map(function (cb) { return cb.value; });
+        if (wanted.length === 0) {
+          status.textContent = 'الرجاء اختيار حالة زبون واحدة على الأقل';
+          return;
+        }
+        const allPoints = data.points;
+        const filtered = allPoints.filter(function (p) {
+          const st = String(p['حالة الزبون'] || '').trim();
+          return st ? wanted.indexOf(st) !== -1 : wanted.indexOf('__none__') !== -1;
+        });
+        const excluded = allPoints.length - filtered.length;
+
+        if (filtered.length === 0) {
+          status.textContent = 'لا توجد نقاط مطابقة للحالات المختارة (تم استبعاد ' + excluded + ' نقطة)';
+          return;
+        }
+        status.textContent = 'المناطق: ' + areas.join('، ') + ' — معروضة: ' + filtered.length +
+          ' من ' + allPoints.length + (excluded > 0 ? ' (مستبعدة ' + excluded + ' حسب الحالة)' : '');
 
         // "Select all shown points" button
         const selectAllBtn = document.createElement('button');
         selectAllBtn.type = 'button';
         selectAllBtn.className = 'home-btn secondary';
         selectAllBtn.style.marginTop = '10px';
-        selectAllBtn.textContent = '✔️ تحديد كل النقاط المعروضة';
+        selectAllBtn.textContent = '✔️ تحديد كل النقاط المعروضة (' + filtered.length + ')';
         selectAllBtn.onclick = function () {
-          data.points.forEach(function (p) {
+          filtered.forEach(function (p) {
             selectedPoints[p['اسم نقطة البيع']] = p;
           });
           // re-render to reflect all checked
-          renderAreaPoints(data.points, '', list);
+          renderAreaPoints(filtered, '', list);
           updateSelectedCount();
         };
         list.appendChild(selectAllBtn);
 
-        renderAreaPoints(data.points, '', list);
+        renderAreaPoints(filtered, '', list);
         updateSelectedCount();
       })
       .catch(function () {
@@ -1464,9 +1917,23 @@
       line1.textContent = name + (p['رقم الهاتف'] ? ' · ' + p['رقم الهاتف'] : '');
       info.appendChild(line1);
 
+      // Status line, color-coded for a quick glance
+      const st = String(p['حالة الزبون'] || '').trim();
+      if (st) {
+        const stEl = document.createElement('span');
+        stEl.style.fontSize = '11.5px';
+        stEl.style.fontWeight = '600';
+        if (st === 'تم البيع') stEl.style.color = 'var(--green)';
+        else if (st === 'لا يريد التعامل معنا') stEl.style.color = 'var(--danger)';
+        else stEl.style.color = 'var(--amber)';
+        stEl.textContent = '🧾 ' + st;
+        info.appendChild(stEl);
+      }
+
       const meta = [];
-      if (p['حالة الزبون']) meta.push('🧾 ' + p['حالة الزبون']);
+      if (p['المنطقة']) meta.push('📍 ' + p['المنطقة']);
       if (p['آخر زيارة']) meta.push('🕒 آخر زيارة: ' + p['آخر زيارة']);
+      if (!st) meta.push('🧾 بدون حالة مسجّلة');
       if (meta.length) {
         const line2 = document.createElement('span');
         line2.style.fontSize = '11px';
@@ -2324,6 +2791,7 @@
     updateHomeStats();
     attachRipples();
     highlightNav('home');
+    loadCompetitors();
   });
 
   document.getElementById('phone').addEventListener('input', function (e) {
