@@ -1390,14 +1390,131 @@
       '<p class="field-hint" style="margin-bottom:10px;">اختر المناطق ثم حدد النقاط التي تحتاج مروّج — ستظهر لمدير التسويق ليحدد خط سير المروّج.</p>' +
       '<label>المناطق</label>' +
       '<div id="areaPickerFlag"></div>' +
-      '<button type="button" class="submit-btn" onclick="loadFlagCandidates()">عرض النقاط</button>' +
+      '<button type="button" class="submit-btn" onclick="loadFlagCandidates()">عرض نقاط المناطق المختارة</button>' +
+      '<button type="button" class="home-btn secondary" onclick="loadFlagCandidatesAll()" style="margin-top:8px;">📋 عرض كل النقاط (جميع المناطق)</button>' +
       '<div class="geo-status" id="flagStatus"></div>' +
       '<div id="flagList"></div>' +
       '<div id="flagCount" class="visit-counter" style="display:none;"></div>' +
       '<button type="button" class="submit-btn" id="saveFlagBtn" style="display:none;" onclick="saveFlagForPromoter()">🧍 تحويل النقاط المختارة</button>' +
-      '<div class="msg success" id="flagMsg"></div>';
+      '<div class="msg success" id="flagMsg"></div>' +
+      '<hr style="margin:22px 0;border:none;border-top:1px solid var(--line);">' +
+      '<button type="button" class="home-btn secondary" onclick="loadFlaggedPoints()">📋 عرض النقاط المحوّلة حاليًا (للإلغاء)</button>' +
+      '<div id="flaggedBox"></div>';
 
     initAreaPicker('areaPickerFlag', 'اكتب اسم المنطقة للبحث...');
+  }
+
+  // Load currently flagged points (to allow removing the flag)
+  function loadFlaggedPoints() {
+    var status = document.getElementById('flagStatus');
+    var flaggedBox = document.getElementById('flaggedBox');
+    if (!flaggedBox) return;
+    flaggedBox.innerHTML = '<div class="geo-status">جارٍ التحميل...</div>';
+
+    fetch(WEB_APP_URL + '?action=promoterPoints')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        flaggedBox.innerHTML = '';
+        if (data.result !== 'success' || !data.points || data.points.length === 0) {
+          flaggedBox.innerHTML = '<div class="field-hint" style="text-align:center;margin:12px 0;">لا توجد نقاط محوّلة حاليًا</div>';
+          return;
+        }
+
+        var header = document.createElement('div');
+        header.className = 'visit-counter';
+        header.textContent = 'النقاط المحوّلة حاليًا: ' + data.points.length;
+        flaggedBox.appendChild(header);
+
+        data.points.forEach(function (p) {
+          var name = p['اسم نقطة البيع'] || '';
+          var card = document.createElement('div');
+          card.className = 'route-card';
+
+          var title = document.createElement('div');
+          title.className = 'route-card-title';
+          title.textContent = '🧍 ' + name;
+          card.appendChild(title);
+
+          var meta = document.createElement('div');
+          meta.className = 'route-card-detail';
+          meta.textContent = (p['المنطقة'] ? '📍 ' + p['المنطقة'] : '') +
+            (p['آخر زيارة'] ? ' · 🕒 ' + p['آخر زيارة'] : '');
+          card.appendChild(meta);
+
+          var delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'submit-btn';
+          delBtn.style.marginTop = '10px';
+          delBtn.style.background = 'rgba(214,61,51,0.12)';
+          delBtn.style.color = 'var(--danger)';
+          delBtn.style.boxShadow = 'none';
+          delBtn.textContent = '❌ إلغاء التحويل (لم يعد يحتاج مروّج)';
+          delBtn.onclick = function () {
+            if (!confirm('هل تريد إلغاء تحويل "' + name + '"؟')) return;
+            delBtn.disabled = true;
+            delBtn.textContent = 'جارٍ الإلغاء...';
+            var body = new FormData();
+            body.append('action', 'unflagForPromoter');
+            body.append('points', JSON.stringify([name]));
+            fetch(WEB_APP_URL, { method: 'POST', body: body })
+              .then(function (res) { return res.json(); })
+              .then(function (d) {
+                if (d.result === 'success') {
+                  card.remove();
+                  showToast('تم إلغاء التحويل لـ ' + name, 'success');
+                } else {
+                  delBtn.disabled = false;
+                  delBtn.textContent = '❌ إلغاء التحويل';
+                }
+              })
+              .catch(function () {
+                delBtn.disabled = false;
+                delBtn.textContent = '❌ إلغاء التحويل';
+              });
+          };
+          card.appendChild(delBtn);
+
+          flaggedBox.appendChild(card);
+        });
+      })
+      .catch(function () {
+        flaggedBox.innerHTML = '<div class="field-hint">تعذر الاتصال بالخادم</div>';
+      });
+  }
+
+  function loadFlagCandidatesAll() {
+    var status = document.getElementById('flagStatus');
+    var list = document.getElementById('flagList');
+    list.innerHTML = '';
+    flagPromoterSelected = {};
+    updateFlagCount();
+    status.textContent = 'جارٍ تحميل كل النقاط...';
+
+    fetch(WEB_APP_URL + '?action=points')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.result !== 'success' || !data.points || data.points.length === 0) {
+          status.textContent = 'لا توجد نقاط مسجلة بالنظام';
+          return;
+        }
+        status.textContent = 'جميع المناطق — عدد النقاط: ' + data.points.length;
+
+        var selAll = document.createElement('button');
+        selAll.type = 'button';
+        selAll.className = 'home-btn secondary';
+        selAll.style.marginTop = '10px';
+        selAll.textContent = '✔️ تحديد كل النقاط';
+        selAll.onclick = function () {
+          data.points.forEach(function (p) { flagPromoterSelected[p['اسم نقطة البيع']] = p; });
+          renderFlagList(data.points, list);
+          updateFlagCount();
+        };
+        list.appendChild(selAll);
+
+        renderFlagList(data.points, list);
+        updateFlagCount();
+      })
+      .catch(function () { status.textContent = 'تعذر الاتصال بالخادم'; });
   }
 
   function loadFlagCandidates() {
@@ -1556,6 +1673,8 @@
       '<select id="promRouteProm">' + promOpts + '</select>' +
       '<label>التاريخ</label>' +
       '<input type="date" id="promRouteDate">' +
+      '<label>تصفية حسب المنطقة (اتركها فارغة لعرض الكل)</label>' +
+      '<div id="areaPickerPromRoute"></div>' +
       '<button type="button" class="submit-btn" onclick="loadPromoterCandidates()">عرض النقاط التي تحتاج مروّج</button>' +
       '<div class="geo-status" id="promRouteStatus"></div>' +
       '<div id="promRouteList"></div>' +
@@ -1563,15 +1682,20 @@
       '<button type="button" class="submit-btn" id="savePromRouteBtn" style="display:none;" onclick="savePromoterRoute()">💾 حفظ خط سير المروّج</button>' +
       '<div class="msg success" id="promRouteMsg"></div>';
     document.getElementById('promRouteDate').value = getTodayDateStr();
+    initAreaPicker('areaPickerPromRoute', 'اكتب اسم المنطقة للبحث (أو اتركه فارغًا للكل)...');
   }
 
   function loadPromoterCandidates() {
+    const areas = getPickerAreas('areaPickerPromRoute');
     const status = document.getElementById('promRouteStatus');
     const list = document.getElementById('promRouteList');
     list.innerHTML = '';
     status.textContent = 'جارٍ التحميل...';
 
-    fetch(WEB_APP_URL + '?action=promoterPoints')
+    let url = WEB_APP_URL + '?action=promoterPoints';
+    if (areas.length) url += '&areas=' + encodeURIComponent(areas.join(','));
+
+    fetch(url)
       .then(function (res) { return res.json(); })
       .then(function (data) {
         if (data.result !== 'success' || !data.points || data.points.length === 0) {
