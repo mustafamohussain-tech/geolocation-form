@@ -1113,6 +1113,65 @@
     return !!currentAdmin && !isOwner() && !isMarketingManager() && !isPromoter();
   }
 
+  // --- One-time backfill: assign IDs to existing customers without one ---
+  function buildCustomerIdPanel() {
+    var content = document.getElementById('adminContent');
+    if (!isManagement()) {
+      notAllowedPanel('هذه الصفحة متاحة لحساب الإدارة فقط');
+      return;
+    }
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<h2 style="font-size:16px;margin-bottom:4px;">🆔 معرّفات الزبائن (ID)</h2>' +
+      '<p class="field-hint" style="margin-bottom:10px;">' +
+      'كل زبون جديد يحصل على ID تلقائيًا من الآن. اضغط الزر أدناه ' +
+      '<b>مرة واحدة فقط</b> لتوليد IDs للنقاط القديمة التي ليس لها معرّف بعد. ' +
+      'العملية آمنة ولا تكرر IDs موجودة.' +
+      '</p>' +
+      '<button type="button" class="submit-btn" onclick="runCustomerIdBackfill()">🆔 توليد IDs للنقاط القديمة الآن</button>' +
+      '<div class="geo-status" id="backfillStatus"></div>' +
+      '<div class="msg success" id="backfillMsg"></div>';
+  }
+
+  function runCustomerIdBackfill() {
+    var status = document.getElementById('backfillStatus');
+    var msg = document.getElementById('backfillMsg');
+    msg.style.display = 'none';
+    if (!confirm('سيتم فحص كل النقاط القديمة وتوليد ID لكل زبون ليس له واحد. هل تريد المتابعة؟')) return;
+    status.textContent = 'جارٍ المعالجة، قد يستغرق دقيقة...';
+
+    var body = new FormData();
+    body.append('action', 'backfillCustomerIds');
+    body.append('username', (currentAdmin && currentAdmin.username) || '');
+    body.append('password', (currentAdmin && currentAdmin.pass) || '');
+
+    fetch(WEB_APP_URL, { method: 'POST', body: body })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        status.textContent = '';
+        if (data.result === 'success') {
+          msg.className = 'msg success';
+          msg.textContent = 'تم توليد ' + data.groups + ' معرّف (ID) لعدد ' + data.assigned + ' صف ✅';
+          msg.style.display = 'block';
+          showToast('تم توليد معرّفات الزبائن', 'success');
+        } else if (data.error === 'not_authorized') {
+          msg.className = 'msg error';
+          msg.textContent = '🔒 غير مصرّح — التنفيذ متاح لحساب الإدارة فقط';
+          msg.style.display = 'block';
+        } else {
+          msg.className = 'msg error';
+          msg.textContent = 'حدث خطأ أثناء المعالجة';
+          msg.style.display = 'block';
+        }
+      })
+      .catch(function () {
+        status.textContent = '';
+        msg.className = 'msg error';
+        msg.textContent = 'تعذر الاتصال بالخادم';
+        msg.style.display = 'block';
+      });
+  }
+
   function buildCompetitorsPanel() {
     const content = document.getElementById('adminContent');
     if (!isManagement()) {
@@ -2236,6 +2295,7 @@
     // Shared-list editing: management only
     if (isManagement()) {
       html += '<button type="button" class="home-btn admin" onclick="buildCompetitorsPanel()">🏢 إدارة الشركات المنافسة</button>';
+      html += '<button type="button" class="home-btn" onclick="buildCustomerIdPanel()">🆔 معرّفات الزبائن (ID)</button>';
     }
 
     content.innerHTML = html;
