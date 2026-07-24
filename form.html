@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root {
     --bg-0: #eef2f7;
@@ -522,6 +524,14 @@
   .p-amber { background: rgba(200,121,27,0.13); color: var(--amber); }
   .p-red { background: rgba(214,61,51,0.13); color: var(--danger); }
   .warn-line { color: var(--danger); font-weight: 600; font-size: 12.5px; margin-top: 5px; }
+
+  /* Live map */
+  #mapContainer { width: 100%; height: 65vh; border-radius: 16px; border: 1px solid var(--line);
+    margin-top: 12px; overflow: hidden; }
+  .map-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; justify-content: center; }
+  .map-leg-item { display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; }
+  .map-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
 </style>
 </head>
 <body>
@@ -653,6 +663,7 @@
         <option value="تم البيع">تم البيع</option>
         <option value="لديه مخزون">لديه مخزون</option>
         <option value="لا يريد التعامل معنا">لا يريد التعامل معنا</option>
+        <option value="مسؤول المشتريات غير متواجد">مسؤول المشتريات غير متواجد</option>
       </select>
 
       <div id="reasonWrapper">
@@ -662,6 +673,7 @@
           <option value="بسبب السعر">بسبب السعر</option>
           <option value="منتج غير معروف">منتج غير معروف</option>
           <option value="يتعامل فقط بالستندر">يتعامل فقط بالستندر</option>
+          <option value="يشتري من جملة">يشتري من جملة</option>
         </select>
       </div>
 
@@ -2037,6 +2049,161 @@
       .catch(function () { status.textContent = 'تعذر الاتصال بالخادم'; });
   }
 
+  // --- Live map: all sale points colored by customer status ---
+  let mapInstance = null;
+  let mapLayers = {};
+  let mapRefreshTimer = null;
+
+  function buildMapPanel() {
+    var content = document.getElementById('adminContent');
+    content.innerHTML =
+      '<button type="button" class="back-btn" onclick="destroyMap();buildAdminMenu()"><svg viewBox="0 0 24 24" style="width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2.5;vertical-align:-3px"><path d="M9 6l6 6-6 6"/></svg> قائمة الإدارة</button>' +
+      '<h2 style="font-size:16px;margin-bottom:4px;">🗺️ خريطة نقاط البيع (حيّة)</h2>' +
+      '<p class="field-hint" style="margin-bottom:4px;">تتحدّث تلقائيًا كل 3 دقائق</p>' +
+      '<div class="geo-status" id="mapStatus">جارٍ التحميل...</div>' +
+      '<div class="map-legend" id="mapLegend"></div>' +
+      '<div id="mapContainer"></div>' +
+      '<button type="button" class="submit-btn" style="margin-top:12px;" onclick="loadMapPoints()">🔄 تحديث الآن</button>';
+
+    setTimeout(function () { initMap(); loadMapPoints(); }, 100);
+    // Auto-refresh every 3 minutes
+    if (mapRefreshTimer) clearInterval(mapRefreshTimer);
+    mapRefreshTimer = setInterval(loadMapPoints, 180000);
+  }
+
+  function destroyMap() {
+    if (mapRefreshTimer) { clearInterval(mapRefreshTimer); mapRefreshTimer = null; }
+    if (mapInstance) { mapInstance.remove(); mapInstance = null; }
+    mapLayers = {};
+  }
+
+  function initMap() {
+    if (mapInstance) { mapInstance.remove(); mapInstance = null; }
+    mapInstance = L.map('mapContainer').setView([33.3, 44.4], 11); // Baghdad center
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap',
+      maxZoom: 19
+    }).addTo(mapInstance);
+    mapLayers = {};
+  }
+
+  var MAP_COLORS = {
+    'تم البيع': '#1f9d54',
+    'لديه مخزون': '#c8791b',
+    'لا يريد التعامل معنا': '#d63d33',
+    'مسؤول المشتريات غير متواجد': '#8b5cf6',
+    '': '#8494ac'
+  };
+  var MAP_LABELS = {
+    'تم البيع': '🟢 تم البيع',
+    'لديه مخزون': '🟡 لديه مخزون',
+    'لا يريد التعامل معنا': '🔴 لا يريد التعامل',
+    'مسؤول المشتريات غير متواجد': '🟣 غير متواجد',
+    '': '⚪ بدون حالة'
+  };
+
+  function loadMapPoints() {
+    var status = document.getElementById('mapStatus');
+    if (status) status.textContent = 'جارٍ التحميل...';
+
+    fetch(WEB_APP_URL + '?action=mapPoints')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (!mapInstance || data.result !== 'success') {
+          if (status) status.textContent = 'حدث خطأ';
+          return;
+        }
+
+        // Clear existing markers
+        Object.keys(mapLayers).forEach(function (k) {
+          mapInstance.removeLayer(mapLayers[k]);
+        });
+        mapLayers = {};
+
+        var counts = {};
+        var bounds = [];
+
+        // Create layer groups per status
+        var groups = {};
+        Object.keys(MAP_COLORS).forEach(function (s) { groups[s] = []; });
+
+        (data.points || []).forEach(function (p) {
+          if (!isFinite(p.lt) || !isFinite(p.ln)) return;
+          var st = p.s || '';
+          var color = MAP_COLORS[st] || MAP_COLORS[''];
+          counts[st] = (counts[st] || 0) + 1;
+
+          var phoneNum = String(p.p || '').replace(/[^0-9]/g, '');
+          if (phoneNum.length === 10 && phoneNum.charAt(0) === '7') phoneNum = '0' + phoneNum;
+
+          var marker = L.circleMarker([p.lt, p.ln], {
+            radius: 8, fillColor: color, color: '#fff',
+            weight: 2, opacity: 1, fillOpacity: 0.85
+          });
+
+          marker.bindPopup(
+            '<div style="direction:rtl;font-family:Cairo,Tahoma;min-width:160px;">' +
+            '<b>' + p.n + '</b><br>' +
+            '📍 ' + (p.a || '') + '<br>' +
+            (phoneNum ? '📞 <a href="tel:' + phoneNum + '">' + phoneNum + '</a><br>' : '') +
+            '🧾 ' + (st || 'بدون حالة') + '<br>' +
+            (p.d ? '🕒 آخر زيارة: ' + p.d : '') +
+            '</div>'
+          );
+
+          if (!groups[st]) groups[st] = [];
+          groups[st].push(marker);
+          bounds.push([p.lt, p.ln]);
+        });
+
+        // Add layer groups to map
+        Object.keys(groups).forEach(function (st) {
+          if (groups[st].length) {
+            mapLayers[st] = L.layerGroup(groups[st]).addTo(mapInstance);
+          }
+        });
+
+        // Fit bounds
+        if (bounds.length) {
+          mapInstance.fitBounds(bounds, { padding: [30, 30] });
+        }
+
+        // Build legend with toggle + counts
+        var legend = document.getElementById('mapLegend');
+        if (legend) {
+          legend.innerHTML = '';
+          Object.keys(MAP_COLORS).forEach(function (st) {
+            var count = counts[st] || 0;
+            if (count === 0 && st !== '') return;
+            var item = document.createElement('span');
+            item.className = 'map-leg-item';
+            item.innerHTML = '<span class="map-dot" style="background:' + MAP_COLORS[st] + '"></span>' +
+              (MAP_LABELS[st] || st) + ' (' + count + ')';
+            item.style.opacity = '1';
+            item.onclick = function () {
+              if (mapLayers[st]) {
+                if (mapInstance.hasLayer(mapLayers[st])) {
+                  mapInstance.removeLayer(mapLayers[st]);
+                  item.style.opacity = '0.35';
+                } else {
+                  mapInstance.addLayer(mapLayers[st]);
+                  item.style.opacity = '1';
+                }
+              }
+            };
+            legend.appendChild(item);
+          });
+        }
+
+        var total = data.points ? data.points.length : 0;
+        if (status) status.textContent = 'إجمالي النقاط: ' + total + ' · آخر تحديث: ' +
+          new Date().toLocaleTimeString('ar-IQ');
+      })
+      .catch(function () {
+        if (status) status.textContent = 'تعذر الاتصال بالخادم';
+      });
+  }
+
   function buildAdminMenu() {
     const content = document.getElementById('adminContent');
     let html = '';
@@ -2051,7 +2218,8 @@
       html += '<button type="button" class="home-btn secondary" onclick="buildReportsPanel()">📊 عرض تقارير الزيارات الميدانية</button>' +
         '<button type="button" class="home-btn admin" onclick="buildProgressPanel()">📈 متابعة تقدّم المندوبين اليومي</button>' +
         '<button type="button" class="home-btn" onclick="buildPeriodPanel()">📅 تقرير فترة زمنية</button>' +
-        '<button type="button" class="home-btn secondary" onclick="buildPromoterPanel()">🧍 متاجر تحتاج مروّج</button>';
+        '<button type="button" class="home-btn secondary" onclick="buildPromoterPanel()">🧍 متاجر تحتاج مروّج</button>' +
+        '<button type="button" class="home-btn" onclick="buildMapPanel()">🗺️ خريطة نقاط البيع (حيّة)</button>';
     }
 
     if (canPlan()) {
@@ -2612,6 +2780,7 @@
       '<label class="checkbox-item"><input type="checkbox" class="status-f" value="تم البيع" checked> تم البيع</label>' +
       '<label class="checkbox-item"><input type="checkbox" class="status-f" value="لديه مخزون" checked> لديه مخزون</label>' +
       '<label class="checkbox-item"><input type="checkbox" class="status-f" value="لا يريد التعامل معنا"> لا يريد التعامل معنا</label>' +
+      '<label class="checkbox-item"><input type="checkbox" class="status-f" value="مسؤول المشتريات غير متواجد" checked> مسؤول المشتريات غير متواجد</label>' +
       '<label class="checkbox-item"><input type="checkbox" class="status-f" value="__none__" checked> بدون حالة مسجّلة</label>' +
       '</div>' +
       '<button type="button" class="submit-btn" onclick="loadAreaPoints()">عرض نقاط المناطق المختارة</button>' +
